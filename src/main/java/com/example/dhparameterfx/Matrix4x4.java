@@ -14,7 +14,7 @@ public class Matrix4x4 {
         }
     }
 
-    public static Matrix4x4 identiy() {
+    public static Matrix4x4 identity() {
 
         return new Matrix4x4(new double[][]{
                 {1, 0, 0, 0},

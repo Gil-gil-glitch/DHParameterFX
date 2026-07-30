@@ -127,23 +127,55 @@ public class kinematic3DApp extends Application {
         panel.setPrefWidth(320);
         panel.setPadding(new Insets(15));
         panel.setStyle("-fx-background-color: #2b2b36; -fx-text-fill: white;");
+
         Label header = new Label("Kinematic Chain Setup");
         header.setStyle("-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: white;");
 
+        // Add Joint Button
         Button addBtn = new Button("+ Add Joint");
         addBtn.setMaxWidth(Double.MAX_VALUE);
+        addBtn.setStyle("-fx-background-color: #98c379; -fx-text-fill: #1e1e24; -fx-font-weight: bold;");
         addBtn.setOnAction(e -> {
             dhModels.add(new DHParameterModel(5.0, 0.0, 0.0, 0.0));
+            selectedJointIndex = dhModels.size() - 1;
             rebuildUIControls();
             updateRobot3D();
         });
+
+        // Preset Selection Toolbar
+        Label presetsLabel = new Label("Presets:");
+        presetsLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #abb2bf; -fx-font-weight: bold;");
+
+        HBox presetBar = new HBox(8);
+        Button scaraBtn = new Button("SCARA");
+        scaraBtn.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(scaraBtn, Priority.ALWAYS);
+        scaraBtn.setStyle("-fx-background-color: #3b3b4d; -fx-text-fill: #61afef; -fx-border-color: #61afef; -fx-border-radius: 3;");
+        scaraBtn.setOnAction(e -> loadScaraPreset());
+
+        Button pumaBtn = new Button("PUMA 560");
+        pumaBtn.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(pumaBtn, Priority.ALWAYS);
+        pumaBtn.setStyle("-fx-background-color: #3b3b4d; -fx-text-fill: #e5c07b; -fx-border-color: #e5c07b; -fx-border-radius: 3;");
+        pumaBtn.setOnAction(e -> loadPuma560Preset());
+
+        presetBar.getChildren().addAll(scaraBtn, pumaBtn);
 
         controlsContainer = new VBox(15);
         ScrollPane scrollPane = new ScrollPane(controlsContainer);
         scrollPane.setFitToWidth(true);
         scrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
         VBox.setVgrow(scrollPane, Priority.ALWAYS);
-        panel.getChildren().addAll(header, addBtn, new Separator(Orientation.HORIZONTAL), scrollPane);
+
+        panel.getChildren().addAll(
+                header,
+                addBtn,
+                presetsLabel,
+                presetBar,
+                new Separator(Orientation.HORIZONTAL),
+                scrollPane
+        );
+
         return panel;
     }
 

@@ -10,7 +10,10 @@ import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
+import javafx.scene.shape.Box;
+import javafx.scene.shape.CullFace;
 import javafx.scene.shape.Cylinder;
+import javafx.scene.shape.DrawMode;
 import javafx.scene.transform.Affine;
 import javafx.scene.transform.Rotate;
 import javafx.scene.transform.Translate;
@@ -19,26 +22,28 @@ import javafx.stage.Stage;
 import java.util.ArrayList;
 import java.util.List;
 
-import javafx.scene.shape.Box;
-import javafx.scene.shape.DrawMode;
-import javafx.scene.shape.CullFace;
-
-
 public class kinematic3DApp extends Application {
 
-    private double dragMouseX;
-    private double dragMouseY;
-    private GizmoData activeGizmo = null;
-
     private final Group world = new Group();
-    private final Group robotGroup = new Group(); // Container specifically for robot geometry
+    private final Group robotGroup = new Group();
     private final ForwardKinematicsEngine fkEngine = new ForwardKinematicsEngine();
 
-    // Active model parameters
     private final List<DHParameterModel> dhModels = new ArrayList<>();
     private VBox controlsContainer;
+    private MatrixDisplayHUD hud;
 
     private int selectedJointIndex = 0;
+
+    private Node createSelectionHighlightBox(double size) {
+        Box box = new Box(size, size, size);
+        box.setDrawMode(DrawMode.LINE);
+        box.setCullFace(CullFace.NONE);
+
+        PhongMaterial blueWireframe = new PhongMaterial(Color.web("#61afef"));
+        box.setMaterial(blueWireframe);
+
+        return box;
+    }
 
     @Override
     public void start(Stage primaryStage) {
@@ -62,18 +67,26 @@ public class kinematic3DApp extends Application {
         pointLight.setTranslateZ(-50);
         world.getChildren().addAll(ambient, pointLight);
 
-        // Set up Default 3 Joint Robot
-        dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 30.0));   // Joint 1
-        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 40.0));  // Joint 2
-        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -25.0));   // Joint 3
+        // Default 3 Joint Robot
+        dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 30.0));
+        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 40.0));
+        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -25.0));
+
+        // Create HUD Overlay
+        hud = new MatrixDisplayHUD();
+
+        // Layer SubScene and HUD using StackPane
+        StackPane viewportPane = new StackPane();
+        viewportPane.getChildren().addAll(subScene, hud);
+        StackPane.setAlignment(hud, Pos.TOP_LEFT);
+        StackPane.setMargin(hud, new Insets(15));
 
         BorderPane root = new BorderPane();
-        root.setCenter(subScene);
+        root.setCenter(viewportPane);
 
-        subScene.widthProperty().bind(root.widthProperty().subtract(320));
-        subScene.heightProperty().bind(root.heightProperty());
+        subScene.widthProperty().bind(viewportPane.widthProperty());
+        subScene.heightProperty().bind(viewportPane.heightProperty());
 
-        // Side Control Panel
         VBox sidePanel = createControlPanel();
         root.setRight(sidePanel);
 
@@ -81,20 +94,15 @@ public class kinematic3DApp extends Application {
 
         subScene.setOnMouseClicked(event -> {
             Node picked = event.getPickResult().getIntersectedNode();
-
-            // Walk up the node hierarchy to find if we clicked inside an AxisGroup
             Node current = picked;
             while (current != null && !(current instanceof AxisGroup) && current != robotGroup) {
                 current = current.getParent();
             }
 
             if (current instanceof AxisGroup axis) {
-
-                // Tag stored on the AxisGroup (or get index from loop)
                 Object tag = axis.getUserData();
 
                 if (tag instanceof Integer jointIdx) {
-
                     selectedJointIndex = jointIdx;
                     rebuildUIControls();
                     updateRobot3D();
@@ -102,41 +110,8 @@ public class kinematic3DApp extends Application {
                 }
 
             }
-
         });
 
-        scene.setOnMouseDragged(event -> {
-
-            if (activeGizmo != null) {
-
-                double deltaX = event.getSceneX() - dragMouseX;
-                double deltaY = event.getSceneY() - dragMouseY;
-
-                double dragAmount = (Math.abs(deltaX) > Math.abs(deltaY)) ? deltaX : -deltaY;
-
-                DHParameterModel model = dhModels.get(activeGizmo.jointIndex());
-                double sensitivity = 0.1;
-
-                switch (activeGizmo.type()) {
-                    case DRAG_A -> model.setA(model.getA() + dragAmount * sensitivity);
-                    case DRAG_D -> model.setD(model.getD() + dragAmount * sensitivity);
-                    case ROTATE_THETA -> model.setTheta(model.getTheta() + dragAmount * sensitivity * 2);
-                    case ROTATE_ALPHA -> model.setAlpha(model.getAlpha() + dragAmount * sensitivity * 2);
-                }
-
-                dragMouseX = event.getSceneX();
-                dragMouseY = event.getSceneY();
-
-                // Force UI rebuild + 3D update on drag
-                rebuildUIControls();
-                updateRobot3D();
-
-                event.consume(); // Blocks the orbit camera while dragging a gizmo
-
-            }
-        });
-
-        // Register Camera AFTER gizmo listeners
         cameraRig.registerMouseEvents(scene);
 
         rebuildUIControls();
@@ -147,26 +122,7 @@ public class kinematic3DApp extends Application {
         primaryStage.show();
     }
 
-    /**
-     * Creates a blue wireframe bounding box to visually highlight the selected joint.
-     */
-    private Node createSelectionHighlightBox(double size) {
-        Box box = new Box(size, size, size);
-        box.setDrawMode(DrawMode.LINE); // Wireframe outline
-        box.setCullFace(CullFace.NONE);
-
-        PhongMaterial blueWireframe = new PhongMaterial(Color.web("#61afef"));
-        box.setMaterial(blueWireframe);
-
-        return box;
-    }
-
-
-    /**
-     * Constructs the UI Control Panel on the right side.
-     */
     private VBox createControlPanel() {
-
         VBox panel = new VBox(10);
         panel.setPrefWidth(320);
         panel.setPadding(new Insets(15));
@@ -191,26 +147,22 @@ public class kinematic3DApp extends Application {
         return panel;
     }
 
-    /**
-     * Rebuilds the control cards for all active joints.
-     */
     private void rebuildUIControls() {
         controlsContainer.getChildren().clear();
 
         for (int i = 0; i < dhModels.size(); i++) {
+
             int index = i;
             DHParameterModel model = dhModels.get(i);
 
             VBox card = new VBox(8);
 
-            // Highlight active card with a blue border and darker background
             boolean isSelected = (i == selectedJointIndex);
             String borderStyle = isSelected ? "-fx-border-color: #61afef; -fx-border-width: 2px; -fx-border-radius: 5;" : "";
             String bgStyle = isSelected ? "-fx-background-color: #2c313a;" : "-fx-background-color: #3b3b4d;";
 
-            card.setStyle(bgStyle + " -fx-padding: 10; -fx-background-radius: 5; " + borderStyle);
+            card.setStyle(STR."\{bgStyle} -fx-padding: 10; -fx-background-radius: 5; \{borderStyle}");
 
-            // Clicking card also selects joint in 3D
             card.setOnMouseClicked(e -> {
                 selectedJointIndex = index;
                 rebuildUIControls();
@@ -219,8 +171,8 @@ public class kinematic3DApp extends Application {
 
             HBox cardHeader = new HBox();
             cardHeader.setAlignment(Pos.CENTER_LEFT);
-            Label title = new Label("Joint " + (i + 1) + (isSelected ? " (Selected)" : ""));
-            title.setStyle("-fx-font-weight: bold; -fx-text-fill: " + (isSelected ? "#61afef" : "#abb2bf") + ";");
+            Label title = new Label(STR."Joint \{i + 1}\{isSelected ? " (Selected)" : ""}");
+            title.setStyle(STR."-fx-font-weight: bold; -fx-text-fill: \{isSelected ? "#61afef" : "#abb2bf"};");
 
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -253,7 +205,6 @@ public class kinematic3DApp extends Application {
     }
 
     private HBox createSliderRow(String label, double min, double max, javafx.beans.property.DoubleProperty prop) {
-
         HBox row = new HBox(8);
         row.setAlignment(Pos.CENTER_LEFT);
         Label lbl = new Label(label);
@@ -267,21 +218,16 @@ public class kinematic3DApp extends Application {
         valueLbl.setPrefWidth(40);
         valueLbl.setStyle("-fx-text-fill: #e5c07b; -fx-font-size: 11px;");
 
-        // Bidirectional listener & auto-update 3D scene
         slider.valueProperty().addListener((obs, oldVal, newVal) -> {
             prop.set(newVal.doubleValue());
             valueLbl.setText(String.format("%.1f", newVal.doubleValue()));
             updateRobot3D();
-
         });
 
         row.getChildren().addAll(lbl, slider, valueLbl);
         return row;
     }
 
-    /**
-     * Clears and redraws the 3D robot chain based on updated model data.
-     */
     private void updateRobot3D() {
         robotGroup.getChildren().clear();
 
@@ -292,23 +238,26 @@ public class kinematic3DApp extends Application {
 
         List<Matrix4x4> transforms = fkEngine.computeCumulativeTransforms(dhParams);
 
+        // Update HUD with cumulative transform of end-effector (last matrix)
+        if (!transforms.isEmpty() && hud != null) {
+            hud.update(transforms.get(transforms.size() - 1));
+        }
+
         for (int i = 0; i < transforms.size(); i++) {
             Matrix4x4 mat = transforms.get(i);
 
-            // Render RGB Axis Frame
             AxisGroup axis = new AxisGroup(3.0, 0.2, i);
-            axis.setUserData(i); // Tag the entire group with joint index
+            axis.setUserData(i);
             applyMatrixToNode(axis, mat);
             robotGroup.getChildren().add(axis);
 
-            // Render Selection Box on the currently selected joint
             if (i == selectedJointIndex) {
                 Node highlightBox = createSelectionHighlightBox(4.5);
                 applyMatrixToNode(highlightBox, mat);
                 robotGroup.getChildren().add(highlightBox);
+
             }
 
-            // Render Link Cylinder connecting to previous joint
             if (i > 0) {
                 double[] pPrev = transforms.get(i - 1).getPosition();
                 double[] pCurr = mat.getPosition();
@@ -318,9 +267,13 @@ public class kinematic3DApp extends Application {
 
                 Node linkCylinder = createLinkCylinder(start, end, 0.4, Color.GRAY);
                 robotGroup.getChildren().add(linkCylinder);
+
             }
+
         }
+
     }
+
     private void applyMatrixToNode(Node node, Matrix4x4 m) {
         Affine affine = new Affine(
                 m.get(0, 0), m.get(0, 1), m.get(0, 2), m.get(0, 3),
@@ -328,11 +281,9 @@ public class kinematic3DApp extends Application {
                 m.get(2, 0), m.get(2, 1), m.get(2, 2), m.get(2, 3)
         );
         node.getTransforms().add(affine);
-
     }
 
     private Node createLinkCylinder(Point3D p1, Point3D p2, double radius, Color color) {
-
         Point3D diff = p2.subtract(p1);
         double length = diff.magnitude();
 
@@ -350,15 +301,52 @@ public class kinematic3DApp extends Application {
 
         if (axisOfRot.magnitude() > 1e-4) {
             cylinder.getTransforms().add(new Rotate(angle, axisOfRot));
-
         }
 
         return cylinder;
+    }
 
+    /**
+     * Loads a standard 3-DOF SCARA robot geometry into the model list.
+     */
+    private void loadScaraPreset() {
+        dhModels.clear();
+        // Joint 1: Base rotation
+        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 0.0));
+        // Joint 2: Elbow rotation
+        dhModels.add(new DHParameterModel(8.0, 180.0, 0.0, 0.0));
+        // Joint 3: Wrist translation / offset
+        dhModels.add(new DHParameterModel(0.0, 0.0, 5.0, 0.0));
+
+        selectedJointIndex = 0;
+        rebuildUIControls();
+        updateRobot3D();
+    }
+
+    /**
+     * Loads the standard 6-DOF PUMA 560 robot geometry into the model list.
+     */
+    private void loadPuma560Preset() {
+        dhModels.clear();
+        // Joint 1: Waist rotation
+        dhModels.add(new DHParameterModel(0.0, -90.0, 0.0, 0.0));
+        // Joint 2: Shoulder pitch
+        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -30.0));
+        // Joint 3: Elbow pitch
+        dhModels.add(new DHParameterModel(2.0, 90.0, 0.0, 45.0));
+        // Joint 4: Wrist roll
+        dhModels.add(new DHParameterModel(0.0, -90.0, 8.0, 0.0));
+        // Joint 5: Wrist pitch
+        dhModels.add(new DHParameterModel(0.0, 90.0, 0.0, 30.0));
+        // Joint 6: Tool roll
+        dhModels.add(new DHParameterModel(0.0, 0.0, 2.0, 0.0));
+
+        selectedJointIndex = 0;
+        rebuildUIControls();
+        updateRobot3D();
     }
 
     public static void main(String[] args) {
         launch(args);
-
     }
 }

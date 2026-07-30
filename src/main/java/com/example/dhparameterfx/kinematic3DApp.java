@@ -22,6 +22,11 @@ import javafx.stage.Stage;
 import java.util.ArrayList;
 import java.util.List;
 
+import javafx.stage.FileChooser;
+import java.io.File;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+
 public class kinematic3DApp extends Application {
 
     private final Group world = new Group();
@@ -376,6 +381,114 @@ public class kinematic3DApp extends Application {
         selectedJointIndex = 0;
         rebuildUIControls();
         updateRobot3D();
+    }
+
+    /**
+     * Exports current DH Parameter models to a JSON file.
+     */
+    private void exportToJson(Stage stage) {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Export DH Table to JSON");
+        fileChooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json")
+        );
+        fileChooser.setInitialFileName("robot_dh_config.json");
+
+        File file = fileChooser.showSaveDialog(stage);
+        if (file == null) return;
+
+        StringBuilder json = new StringBuilder();
+        json.append("[\n");
+
+        for (int i = 0; i < dhModels.size(); i++) {
+
+            DHParameterModel model = dhModels.get(i);
+            json.append(String.format(
+                    "  { \"a\": %.4f, \"alpha\": %.4f, \"d\": %.4f, \"theta\": %.4f }",
+                    model.getA(), model.getAlpha(), model.getD(), model.getTheta()
+            ));
+            if (i < dhModels.size() - 1) json.append(",");
+            json.append("\n");
+
+        }
+        json.append("]");
+
+        try (PrintWriter writer = new PrintWriter(file)) {
+            writer.write(json.toString());
+        } catch (Exception e) {
+            showErrorDialog("Export Error", "Failed to save file: " + e.getMessage());
+        }
+
+    }
+
+    /**
+     * Imports DH Parameter models from a JSON file.
+     */
+    private void importFromJson(Stage stage) {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Import DH Table from JSON");
+        fileChooser.getExtensionFilters().add(
+                new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json")
+        );
+
+        File file = fileChooser.showOpenDialog(stage);
+        if (file == null) return;
+
+        try {
+            String content = Files.readString(file.toPath()).trim();
+            if (!content.startsWith("[") || !content.endsWith("]")) {
+                throw new IllegalArgumentException("Invalid JSON format: Expected array of joint objects.");
+            }
+
+            List<DHParameterModel> newModels = new ArrayList<>();
+
+            String inner = content.substring(1, content.length() - 1).trim();
+            String[] objects = inner.split("(?<=\\}),\\s*(?=\\{)");
+
+            for (String objStr : objects) {
+                double a = extractJsonDouble(objStr, "a");
+                double alpha = extractJsonDouble(objStr, "alpha");
+                double d = extractJsonDouble(objStr, "d");
+                double theta = extractJsonDouble(objStr, "theta");
+
+                newModels.add(new DHParameterModel(a, alpha, d, theta));
+
+            }
+
+            if (!newModels.isEmpty()) {
+                dhModels.clear();
+                dhModels.addAll(newModels);
+                selectedJointIndex = 0;
+                rebuildUIControls();
+                updateRobot3D();
+
+            }
+
+        } catch (Exception e) {
+            showErrorDialog("Import Error", "Failed to load DH table: " + e.getMessage());
+
+        }
+    }
+
+    // Method to extract double values from simple JSON keys
+    private double extractJsonDouble(String jsonObj, String key) {
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\"" + key + "\"\\s*:\\s*([-+]?[0-9]*\\.?[0-9]+)");
+        java.util.regex.Matcher matcher = pattern.matcher(jsonObj);
+        if (matcher.find()) {
+            return Double.parseDouble(matcher.group(1));
+        }
+        return 0.0;
+    }
+
+    // Method to alert dialog for file errors
+    private void showErrorDialog(String title, String message) {
+
+        Alert alert = new Alert(Alert.AlertType.ERROR);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
+
     }
 
     public static void main(String[] args) {

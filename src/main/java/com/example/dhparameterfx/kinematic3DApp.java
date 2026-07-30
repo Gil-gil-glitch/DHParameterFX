@@ -92,7 +92,7 @@ public class kinematic3DApp extends Application {
         subScene.widthProperty().bind(viewportPane.widthProperty());
         subScene.heightProperty().bind(viewportPane.heightProperty());
 
-        VBox sidePanel = createControlPanel();
+        VBox sidePanel = createControlPanel(primaryStage);
         root.setRight(sidePanel);
 
         Scene scene = new Scene(root, 1120, 700);
@@ -127,7 +127,7 @@ public class kinematic3DApp extends Application {
         primaryStage.show();
     }
 
-    private VBox createControlPanel() {
+    private VBox createControlPanel(Stage primaryStage) {
         VBox panel = new VBox(10);
         panel.setPrefWidth(320);
         panel.setPadding(new Insets(15));
@@ -166,6 +166,25 @@ public class kinematic3DApp extends Application {
 
         presetBar.getChildren().addAll(scaraBtn, pumaBtn);
 
+        // File I/O Bar
+        Label fileLabel = new Label("File I/O:");
+        fileLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #abb2bf; -fx-font-weight: bold;");
+
+        HBox fileBar = new HBox(8);
+        Button exportBtn = new Button("Export JSON");
+        exportBtn.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(exportBtn, Priority.ALWAYS);
+        exportBtn.setStyle("-fx-background-color: #3b3b4d; -fx-text-fill: #98c379; -fx-border-color: #98c379; -fx-border-radius: 3;");
+        exportBtn.setOnAction(e -> exportToJson(primaryStage));
+
+        Button importBtn = new Button("Import JSON");
+        importBtn.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(importBtn, Priority.ALWAYS);
+        importBtn.setStyle("-fx-background-color: #3b3b4d; -fx-text-fill: #c678dd; -fx-border-color: #c678dd; -fx-border-radius: 3;");
+        importBtn.setOnAction(e -> importFromJson(primaryStage));
+
+        fileBar.getChildren().addAll(exportBtn, importBtn);
+
         controlsContainer = new VBox(15);
         ScrollPane scrollPane = new ScrollPane(controlsContainer);
         scrollPane.setFitToWidth(true);
@@ -177,6 +196,8 @@ public class kinematic3DApp extends Application {
                 addBtn,
                 presetsLabel,
                 presetBar,
+                fileLabel,
+                fileBar,
                 new Separator(Orientation.HORIZONTAL),
                 scrollPane
         );

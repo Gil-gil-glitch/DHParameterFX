@@ -40,6 +40,8 @@ public class Kinematic3DApp extends Application {
         subScene.setCamera(cameraRig.getCamera());
 
         world.getChildren().add(cameraRig.getRootNode());
+        robotGroup.getTransforms().add(new Rotate(-270, Rotate.X_AXIS));
+        robotGroup.getTransforms().add(new Rotate(270, Rotate.Z_AXIS));
         world.getChildren().add(robotGroup);
 
         // Lighting
@@ -52,8 +54,8 @@ public class Kinematic3DApp extends Application {
 
         //  Set up Default 3 Joint Robot
         dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 30.0));   // Joint 1
-        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, -40.0));  // Joint 2
-        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, 25.0));    // Joint 3
+        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 40.0));  // Joint 2
+        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -25.0));    // Joint 3
 
 
         BorderPane root = new BorderPane();

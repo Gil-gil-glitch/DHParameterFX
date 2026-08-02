@@ -141,33 +141,42 @@ public class kinematic3DApp extends Application {
     }
 
     private void runIKAndAnimate() {
-
-        // 1. Record starting angles
-        double[] qStart = new double[dhModels.size()];
-
-        for (int i = 0; i < dhModels.size(); i++) {
-
-            qStart[i] = dhModels.get(i).getTheta();
-
+        // 1. Check basic workspace reachability
+        if (!ikSolver.isTargetReachable(dhModels, targetPos)) {
+            showWarningDialog("Unreachable Target",
+                    "The target position (" + String.format("%.1f, %.1f, %.1f", targetPos[0], targetPos[1], targetPos[2]) +
+                            ") is beyond the robot's kinematic reach.");
+            return;
         }
 
-        // 2. Solve IK
-        boolean converged = ikSolver.solve(dhModels, targetPos, 250, 0.05);
+        // 2. Capture starting configuration
+        double[] qStart = new double[dhModels.size()];
+        for (int i = 0; i < dhModels.size(); i++) {
+            qStart[i] = dhModels.get(i).getTheta();
+        }
 
-        // 3. Record target angles & restore start angles for animation
+        // 3. Solve IK (350 iterations, 0.1 tolerance)
+        boolean solved = ikSolver.solve(dhModels, targetPos, 350, 0.1);
+
+        if (!solved) {
+            // If best error distance > 0.5, alert user
+            showWarningDialog("Target Unreachable",
+                    "The manipulator reached its limit towards the target, but could not match the exact position due to joint constraints.");
+            return;
+        }
+
+        // 4. Record target joint configuration & reset to start position for trajectory
         double[] qEnd = new double[dhModels.size()];
         for (int i = 0; i < dhModels.size(); i++) {
-
             qEnd[i] = dhModels.get(i).getTheta();
             dhModels.get(i).setTheta(qStart[i]);
-
         }
 
         if (playbackTimer != null) playbackTimer.stop();
 
-        // 4. Smooth trajectory playback over 2.0 seconds
+        // 5. Smooth trajectory animation
         final long startTime = System.nanoTime();
-        final double durationNs = 2.0 * 1e9;
+        final double durationNs = 2.0 * 1e9; // 2 seconds
 
         playbackTimer = new AnimationTimer() {
             @Override
@@ -190,6 +199,14 @@ public class kinematic3DApp extends Application {
             }
         };
         playbackTimer.start();
+    }
+
+    private void showWarningDialog(String title, String message) {
+        Alert alert = new Alert(Alert.AlertType.WARNING);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
     }
 
     private VBox createControlPanel(Stage primaryStage) {
@@ -361,14 +378,48 @@ public class kinematic3DApp extends Application {
                 }
             });
 
-            cardHeader.getChildren().addAll(title, spacer, deleteBtn);
+            // Inside rebuildUIControls() method of Kinematic3DApp.java
+
+            HBox limitsRow = new HBox(10);
+            limitsRow.setAlignment(Pos.CENTER_LEFT);
+
+            Label minLbl = new Label("Min θ:");
+            minLbl.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 10px;");
+            TextField minTxt = new TextField(String.format("%.0f", model.getMinTheta()));
+            minTxt.setPrefWidth(50);
+            minTxt.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #98c379; -fx-font-size: 10px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+
+            minTxt.setOnAction(e -> {
+                try {
+                    double v = ExpressionParser.parse(minTxt.getText());
+                    if (minTxt.getText().toLowerCase().contains("pi")) v = Math.toDegrees(v);
+                    model.minThetaProperty().set(v);
+                } catch (Exception ignored) {}
+            });
+
+            Label maxLbl = new Label("Max θ:");
+            maxLbl.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 10px;");
+            TextField maxTxt = new TextField(String.format("%.0f", model.getMaxTheta()));
+            maxTxt.setPrefWidth(50);
+            maxTxt.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #98c379; -fx-font-size: 10px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+
+            maxTxt.setOnAction(e -> {
+                try {
+                    double v = ExpressionParser.parse(maxTxt.getText());
+                    if (maxTxt.getText().toLowerCase().contains("pi")) v = Math.toDegrees(v);
+                    model.maxThetaProperty().set(v);
+                } catch (Exception ignored) {}
+            });
+
+            limitsRow.getChildren().addAll(minLbl, minTxt, maxLbl, maxTxt);
 
             card.getChildren().addAll(
                     cardHeader,
                     createSliderRow("a (Length):", -20, 20, model.aProperty(), false),
                     createSliderRow("α (Twist °):", -180, 180, model.alphaProperty(), true),
                     createSliderRow("d (Offset):", -20, 20, model.dProperty(), false),
-                    createSliderRow("θ (Angle °):", -180, 180, model.thetaProperty(), true)
+                    createSliderRow("θ (Angle °):", model.getMinTheta(), model.getMaxTheta(), model.thetaProperty(), true),
+                    limitsRow
             );
 
             controlsContainer.getChildren().add(card);
@@ -501,9 +552,12 @@ public class kinematic3DApp extends Application {
 
     private void loadScaraPreset() {
         dhModels.clear();
-        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 0.0));
-        dhModels.add(new DHParameterModel(8.0, 180.0, 0.0, 0.0));
-        dhModels.add(new DHParameterModel(0.0, 0.0, 5.0, 0.0));
+        // Joint 1: Base turn [-120°, 120°]
+        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 0.0, -120.0, 120.0));
+        // Joint 2: Elbow [-110°, 110°] prevents link foldback collision
+        dhModels.add(new DHParameterModel(8.0, 180.0, 0.0, 0.0, -110.0, 110.0));
+        // Joint 3: Prismatic translation offset [-90°, 90°]
+        dhModels.add(new DHParameterModel(0.0, 0.0, 5.0, 0.0, -90.0, 90.0));
         selectedJointIndex = 0;
         rebuildUIControls();
         updateRobot3D();
@@ -511,12 +565,12 @@ public class kinematic3DApp extends Application {
 
     private void loadPuma560Preset() {
         dhModels.clear();
-        dhModels.add(new DHParameterModel(0.0, -90.0, 0.0, 0.0));
-        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -30.0));
-        dhModels.add(new DHParameterModel(2.0, 90.0, 0.0, 45.0));
-        dhModels.add(new DHParameterModel(0.0, -90.0, 8.0, 0.0));
-        dhModels.add(new DHParameterModel(0.0, 90.0, 0.0, 30.0));
-        dhModels.add(new DHParameterModel(0.0, 0.0, 2.0, 0.0));
+        dhModels.add(new DHParameterModel(0.0, -90.0, 0.0, 0.0, -160.0, 160.0));
+        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -30.0, -120.0, 120.0));
+        dhModels.add(new DHParameterModel(2.0, 90.0, 0.0, 45.0, -135.0, 135.0));
+        dhModels.add(new DHParameterModel(0.0, -90.0, 8.0, 0.0, -140.0, 140.0));
+        dhModels.add(new DHParameterModel(0.0, 90.0, 0.0, 30.0, -100.0, 100.0));
+        dhModels.add(new DHParameterModel(0.0, 0.0, 2.0, 0.0, -180.0, 180.0));
         selectedJointIndex = 0;
         rebuildUIControls();
         updateRobot3D();

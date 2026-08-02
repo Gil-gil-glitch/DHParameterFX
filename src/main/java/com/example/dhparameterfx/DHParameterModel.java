@@ -9,31 +9,47 @@ public class DHParameterModel {
     private final DoubleProperty d = new SimpleDoubleProperty();
     private final DoubleProperty theta = new SimpleDoubleProperty();
 
-    public DHParameterModel(double a, double alphaDeg, double d, double thetaDeg) {
-        setA(a);
-        setAlpha(alphaDeg);
-        setD(d);
-        setTheta(thetaDeg);
+    // Joint Limits (Defaults: -135° to 135° to avoid self-collision overlaps)
+    private final DoubleProperty minTheta = new SimpleDoubleProperty(-270.0);
+    private final DoubleProperty maxTheta = new SimpleDoubleProperty(270.0);
+
+    public DHParameterModel(double a, double alpha, double d, double theta) {
+        this.a.set(a);
+        this.alpha.set(alpha);
+        this.d.set(d);
+        this.theta.set(theta);
     }
 
-    public DHParameter toDHParameter() {
-        return new DHParameter(getA(), Math.toRadians(getAlpha()), getD(), Math.toRadians(getTheta()));
+    public DHParameterModel(double a, double alpha, double d, double theta, double minTheta, double maxTheta) {
+        this.a.set(a);
+        this.alpha.set(alpha);
+        this.d.set(d);
+        this.theta.set(theta);
+        this.minTheta.set(minTheta);
+        this.maxTheta.set(maxTheta);
     }
 
-    // --- Property Getters & Setters ---
+    // Standard Getters & Properties
     public double getA() { return a.get(); }
-    public void setA(double value) { a.set(value); }
     public DoubleProperty aProperty() { return a; }
 
     public double getAlpha() { return alpha.get(); }
-    public void setAlpha(double value) { alpha.set(value); }
     public DoubleProperty alphaProperty() { return alpha; }
 
     public double getD() { return d.get(); }
-    public void setD(double value) { d.set(value); }
     public DoubleProperty dProperty() { return d; }
 
     public double getTheta() { return theta.get(); }
-    public void setTheta(double value) { theta.set(value); }
+    public void setTheta(double val) { this.theta.set(val); }
     public DoubleProperty thetaProperty() { return theta; }
+
+    public double getMinTheta() { return minTheta.get(); }
+    public DoubleProperty minThetaProperty() { return minTheta; }
+
+    public double getMaxTheta() { return maxTheta.get(); }
+    public DoubleProperty maxThetaProperty() { return maxTheta; }
+
+    public DHParameter toDHParameter() {
+        return new DHParameter(getA(), getAlpha(), getD(), getTheta());
+    }
 }

@@ -6,18 +6,32 @@ import java.util.List;
 public class IKSolver {
 
     private final ForwardKinematicsEngine fkEngine = new ForwardKinematicsEngine();
-    private static final double STEP_SIZE = 1e-4; // Step size for numerical differentiation
+    private static final double STEP_SIZE = 1e-4;
 
     /**
-     * Solves IK iteratively to move end-effector closer to targetPos.
-     * Updates theta values in dhModels in-place.
-     *
-     * @return true if converged within tolerance
+     * Checks if target is within maximum possible arm length.
      */
+    public boolean isTargetReachable(List<DHParameterModel> dhModels, double[] targetPos) {
 
-    public boolean solve(List<DHParameterModel> dhModels, double[] targetPos, double maxIterations, double tolerance) {
+        double maxReach = 0;
 
-        double lambda = 0.1; // Damping factor
+        for (DHParameterModel m : dhModels) {
+
+            maxReach += Math.abs(m.getA()) + Math.abs(m.getD());
+
+        }
+
+        // Base location is origin (0,0,0) in robot frame
+
+        double dist = Math.sqrt(targetPos[0] * targetPos[0] +  targetPos[1] * targetPos[1] + targetPos[2] * targetPos[2]);
+
+        return dist <= maxReach;
+
+    }
+
+    public boolean solve(List<DHParameterModel> dhModels, double[] targetPos, int maxIterations, double tolerance) {
+
+        double lambda = 0.2; // Damping parameter for numerical stability near singularities
 
         for (int iter = 0; iter < maxIterations; iter++) {
 
@@ -28,24 +42,22 @@ public class IKSolver {
 
             double[] currentPos = transforms.get(transforms.size() - 1).getPosition();
 
-            // Error vector e = target - current
-            double ex = targetPos[0] - currentPos[0]; // x
-            double ey = targetPos[1] - currentPos[1]; // y
-            double ez = targetPos[2] - currentPos[2]; // z
+            double ex = targetPos[0] - currentPos[0];
+            double ey = targetPos[1] - currentPos[1];
+            double ez = targetPos[2] - currentPos[2];
 
             double errorDist = Math.sqrt(ex * ex + ey * ey + ez * ez);
 
             if (errorDist < tolerance) {
 
-                return true; // Converged
+                return true;
 
             }
 
             int numJoints = dhModels.size();
             double[][] J = computePositionJacobian(dhModels, currentPos);
 
-            // Compute Damped Pseudo-Inverse: J_damped = J^T * (J * J^T + lambda^2 * I)^-1
-            // For a 3xN Jacobian: A = J * J^T is a 3x3 matrix
+            // Damped Least Squares: J_damped = J^T * (J * J^T + lambda^2 * I)^-1
             double[][] A = new double[3][3];
 
             for (int r = 0; r < 3; r++) {
@@ -68,30 +80,31 @@ public class IKSolver {
 
             }
 
-            // Invert 3x3 matrix A
             double[][] Ainv = invert3x3(A);
             if (Ainv == null) break;
 
-            // Compute Ainv * e
             double[] dampedErr = new double[3];
             dampedErr[0] = Ainv[0][0] * ex + Ainv[0][1] * ey + Ainv[0][2] * ez;
             dampedErr[1] = Ainv[1][0] * ex + Ainv[1][1] * ey + Ainv[1][2] * ez;
             dampedErr[2] = Ainv[2][0] * ex + Ainv[2][1] * ey + Ainv[2][2] * ez;
 
-            // delta_q = J^T * dampedErr
             for (int j = 0; j < numJoints; j++) {
+
                 double dq = J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2];
                 double newTheta = dhModels.get(j).getTheta() + Math.toDegrees(dq);
 
-                // Wrap angles between -180 and 180
-                while (newTheta > 180) newTheta -= 360;
-                while (newTheta < -180) newTheta += 360;
+                // Set joint limits to [-180, 180] degrees
+                if (newTheta > 180) newTheta = 180;
+                if (newTheta < -180) newTheta = -180;
 
                 dhModels.get(j).setTheta(newTheta);
+
             }
+
         }
 
         return false;
+
     }
 
     private double[][] computePositionJacobian(List<DHParameterModel> dhModels, double[] currentPos) {
@@ -99,29 +112,30 @@ public class IKSolver {
         double[][] J = new double[3][n];
 
         for (int j = 0; j < n; j++) {
+
             DHParameterModel model = dhModels.get(j);
             double origTheta = model.getTheta();
 
-            // Finite difference perturbation
             model.setTheta(origTheta + Math.toDegrees(STEP_SIZE));
             List<Matrix4x4> transformsP = fkEngine.computeCumulativeTransforms(getCurrentDHParams(dhModels));
             double[] posP = transformsP.get(transformsP.size() - 1).getPosition();
 
-            model.setTheta(origTheta); // Reset
+            model.setTheta(origTheta);
 
             J[0][j] = (posP[0] - currentPos[0]) / STEP_SIZE;
             J[1][j] = (posP[1] - currentPos[1]) / STEP_SIZE;
             J[2][j] = (posP[2] - currentPos[2]) / STEP_SIZE;
-
         }
 
         return J;
     }
 
     private List<DHParameter> getCurrentDHParams(List<DHParameterModel> dhModels) {
+
         List<DHParameter> list = new ArrayList<>();
         for (DHParameterModel m : dhModels) list.add(m.toDHParameter());
         return list;
+
     }
 
     private double[][] invert3x3(double[][] m) {

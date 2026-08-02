@@ -141,30 +141,31 @@ public class kinematic3DApp extends Application {
     }
 
     private void runIKAndAnimate() {
-        // 1. Workspace Reachability Guard
+        // 1. Check basic workspace reachability
         if (!ikSolver.isTargetReachable(dhModels, targetPos)) {
             showWarningDialog("Unreachable Target",
-                    "The selected target (" + String.format("%.1f, %.1f, %.1f", targetPos[0], targetPos[1], targetPos[2]) +
-                            ") is outside the robot's maximum workspace volume.");
+                    "The target position (" + String.format("%.1f, %.1f, %.1f", targetPos[0], targetPos[1], targetPos[2]) +
+                            ") is beyond the robot's kinematic reach.");
             return;
         }
 
-        // 2. Record starting angles
+        // 2. Capture starting configuration
         double[] qStart = new double[dhModels.size()];
         for (int i = 0; i < dhModels.size(); i++) {
             qStart[i] = dhModels.get(i).getTheta();
         }
 
-        // 3. Solve IK
-        boolean converged = ikSolver.solve(dhModels, targetPos, 300, 0.1);
+        // 3. Solve IK (350 iterations, 0.1 tolerance)
+        boolean solved = ikSolver.solve(dhModels, targetPos, 350, 0.1);
 
-        if (!converged) {
-            showWarningDialog("IK Convergence Failure",
-                    "Target position could not be reached precisely due to joint angle limits or a singularity posture.");
+        if (!solved) {
+            // If best error distance > 0.5, alert user
+            showWarningDialog("Target Unreachable",
+                    "The manipulator reached its limit towards the target, but could not match the exact position due to joint constraints.");
             return;
         }
 
-        // 4. Record target angles & restore start angles for smooth animation
+        // 4. Record target joint configuration & reset to start position for trajectory
         double[] qEnd = new double[dhModels.size()];
         for (int i = 0; i < dhModels.size(); i++) {
             qEnd[i] = dhModels.get(i).getTheta();
@@ -173,7 +174,7 @@ public class kinematic3DApp extends Application {
 
         if (playbackTimer != null) playbackTimer.stop();
 
-        // 5. Execute trajectory animation
+        // 5. Smooth trajectory animation
         final long startTime = System.nanoTime();
         final double durationNs = 2.0 * 1e9; // 2 seconds
 

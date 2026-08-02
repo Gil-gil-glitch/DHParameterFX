@@ -30,11 +30,12 @@ public class IKSolver {
     }
 
     public boolean solve(List<DHParameterModel> dhModels, double[] targetPos, int maxIterations, double tolerance) {
-        double lambda = 0.15; // Damping factor
+        double lambda = 0.2; // Slightly higher damping for Z-axis stability
         double bestError = Double.MAX_VALUE;
         double[] bestThetas = new double[dhModels.size()];
 
         int numJoints = dhModels.size();
+        double maxCartesianStep = 1.0; // Max distance the end-effector can attempt to move per iteration
 
         for (int iter = 0; iter < maxIterations; iter++) {
             List<DHParameter> dhParams = getCurrentDHParams(dhModels);
@@ -62,6 +63,17 @@ public class IKSolver {
                 return true;
             }
 
+            // --- CARTESIAN ERROR CLAMPING ---
+            // If the target is far away, scale down the error vector.
+            // This forces the solver to take a small, stable step toward the target
+            // rather than mathematically exploding.
+            if (errorDist > maxCartesianStep) {
+                double scale = maxCartesianStep / errorDist;
+                ex *= scale;
+                ey *= scale;
+                ez *= scale;
+            }
+
             double[][] J = computePositionJacobian(dhModels, currentPos);
 
             // Compute Damped Pseudoinverse J_damped = J^T * (J * J^T + lambda^2 * I)^-1
@@ -85,17 +97,16 @@ public class IKSolver {
             dampedErr[1] = Ainv[1][0] * ex + Ainv[1][1] * ey + Ainv[1][2] * ez;
             dampedErr[2] = Ainv[2][0] * ex + Ainv[2][1] * ey + Ainv[2][2] * ez;
 
-            // Apply update with strict clamping to configured min/max limits
+            // Apply update with strict clamping
             for (int j = 0; j < numJoints; j++) {
                 DHParameterModel model = dhModels.get(j);
 
                 // Calculate required movement for this joint in degrees
                 double dqDeg = Math.toDegrees(J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2]);
 
-                // LIMIT STEP SIZE: Prevent the solver from teleporting across singularities
-                // Cap the maximum movement per iteration to 15 degrees
-                if (dqDeg > 15.0) dqDeg = 15.0;
-                if (dqDeg < -15.0) dqDeg = -15.0;
+                // Keep the angular step cap to prevent singularity teleportation
+                if (dqDeg > 10.0) dqDeg = 10.0;
+                if (dqDeg < -10.0) dqDeg = -10.0;
 
                 double newTheta = model.getTheta() + dqDeg;
 
@@ -104,14 +115,14 @@ public class IKSolver {
                 if (newTheta < model.getMinTheta()) newTheta = model.getMinTheta();
 
                 model.setTheta(newTheta);
-            }        }
+            }
+        }
 
         // Restore the best configuration achieved
         for (int i = 0; i < numJoints; i++) {
             dhModels.get(i).setTheta(bestThetas[i]);
         }
 
-        // Relax the acceptance threshold slightly to account for limits
         return bestError <= 0.5;
     }
 

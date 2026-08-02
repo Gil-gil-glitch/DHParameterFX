@@ -378,14 +378,48 @@ public class kinematic3DApp extends Application {
                 }
             });
 
-            cardHeader.getChildren().addAll(title, spacer, deleteBtn);
+            // Inside rebuildUIControls() method of Kinematic3DApp.java
+
+            HBox limitsRow = new HBox(10);
+            limitsRow.setAlignment(Pos.CENTER_LEFT);
+
+            Label minLbl = new Label("Min θ:");
+            minLbl.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 10px;");
+            TextField minTxt = new TextField(String.format("%.0f", model.getMinTheta()));
+            minTxt.setPrefWidth(50);
+            minTxt.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #98c379; -fx-font-size: 10px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+
+            minTxt.setOnAction(e -> {
+                try {
+                    double v = ExpressionParser.parse(minTxt.getText());
+                    if (minTxt.getText().toLowerCase().contains("pi")) v = Math.toDegrees(v);
+                    model.minThetaProperty().set(v);
+                } catch (Exception ignored) {}
+            });
+
+            Label maxLbl = new Label("Max θ:");
+            maxLbl.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 10px;");
+            TextField maxTxt = new TextField(String.format("%.0f", model.getMaxTheta()));
+            maxTxt.setPrefWidth(50);
+            maxTxt.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #98c379; -fx-font-size: 10px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+
+            maxTxt.setOnAction(e -> {
+                try {
+                    double v = ExpressionParser.parse(maxTxt.getText());
+                    if (maxTxt.getText().toLowerCase().contains("pi")) v = Math.toDegrees(v);
+                    model.maxThetaProperty().set(v);
+                } catch (Exception ignored) {}
+            });
+
+            limitsRow.getChildren().addAll(minLbl, minTxt, maxLbl, maxTxt);
 
             card.getChildren().addAll(
                     cardHeader,
                     createSliderRow("a (Length):", -20, 20, model.aProperty(), false),
                     createSliderRow("α (Twist °):", -180, 180, model.alphaProperty(), true),
                     createSliderRow("d (Offset):", -20, 20, model.dProperty(), false),
-                    createSliderRow("θ (Angle °):", -180, 180, model.thetaProperty(), true)
+                    createSliderRow("θ (Angle °):", model.getMinTheta(), model.getMaxTheta(), model.thetaProperty(), true),
+                    limitsRow
             );
 
             controlsContainer.getChildren().add(card);

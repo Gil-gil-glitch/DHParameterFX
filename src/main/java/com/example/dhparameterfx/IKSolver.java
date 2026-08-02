@@ -89,17 +89,22 @@ public class IKSolver {
             for (int j = 0; j < numJoints; j++) {
                 DHParameterModel model = dhModels.get(j);
 
-                // Calculate required movement for this joint
-                double dq = J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2];
-                double newTheta = model.getTheta() + Math.toDegrees(dq);
+                // Calculate required movement for this joint in degrees
+                double dqDeg = Math.toDegrees(J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2]);
+
+                // LIMIT STEP SIZE: Prevent the solver from teleporting across singularities
+                // Cap the maximum movement per iteration to 15 degrees
+                if (dqDeg > 15.0) dqDeg = 15.0;
+                if (dqDeg < -15.0) dqDeg = -15.0;
+
+                double newTheta = model.getTheta() + dqDeg;
 
                 // Hard clamp to configured joint bounds
                 if (newTheta > model.getMaxTheta()) newTheta = model.getMaxTheta();
                 if (newTheta < model.getMinTheta()) newTheta = model.getMinTheta();
 
                 model.setTheta(newTheta);
-            }
-        }
+            }        }
 
         // Restore the best configuration achieved
         for (int i = 0; i < numJoints; i++) {

@@ -552,9 +552,12 @@ public class kinematic3DApp extends Application {
 
     private void loadScaraPreset() {
         dhModels.clear();
-        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 0.0));
-        dhModels.add(new DHParameterModel(8.0, 180.0, 0.0, 0.0));
-        dhModels.add(new DHParameterModel(0.0, 0.0, 5.0, 0.0));
+        // Joint 1: Base turn [-120°, 120°]
+        dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 0.0, -120.0, 120.0));
+        // Joint 2: Elbow [-110°, 110°] prevents link foldback collision
+        dhModels.add(new DHParameterModel(8.0, 180.0, 0.0, 0.0, -110.0, 110.0));
+        // Joint 3: Prismatic translation offset [-90°, 90°]
+        dhModels.add(new DHParameterModel(0.0, 0.0, 5.0, 0.0, -90.0, 90.0));
         selectedJointIndex = 0;
         rebuildUIControls();
         updateRobot3D();
@@ -562,12 +565,12 @@ public class kinematic3DApp extends Application {
 
     private void loadPuma560Preset() {
         dhModels.clear();
-        dhModels.add(new DHParameterModel(0.0, -90.0, 0.0, 0.0));
-        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -30.0));
-        dhModels.add(new DHParameterModel(2.0, 90.0, 0.0, 45.0));
-        dhModels.add(new DHParameterModel(0.0, -90.0, 8.0, 0.0));
-        dhModels.add(new DHParameterModel(0.0, 90.0, 0.0, 30.0));
-        dhModels.add(new DHParameterModel(0.0, 0.0, 2.0, 0.0));
+        dhModels.add(new DHParameterModel(0.0, -90.0, 0.0, 0.0, -160.0, 160.0));
+        dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -30.0, -120.0, 120.0));
+        dhModels.add(new DHParameterModel(2.0, 90.0, 0.0, 45.0, -135.0, 135.0));
+        dhModels.add(new DHParameterModel(0.0, -90.0, 8.0, 0.0, -140.0, 140.0));
+        dhModels.add(new DHParameterModel(0.0, 90.0, 0.0, 30.0, -100.0, 100.0));
+        dhModels.add(new DHParameterModel(0.0, 0.0, 2.0, 0.0, -180.0, 180.0));
         selectedJointIndex = 0;
         rebuildUIControls();
         updateRobot3D();

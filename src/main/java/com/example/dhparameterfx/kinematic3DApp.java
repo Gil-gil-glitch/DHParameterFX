@@ -1,5 +1,6 @@
 package com.example.dhparameterfx;
 
+import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
@@ -10,10 +11,7 @@ import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
-import javafx.scene.shape.Box;
-import javafx.scene.shape.CullFace;
-import javafx.scene.shape.Cylinder;
-import javafx.scene.shape.DrawMode;
+import javafx.scene.shape.*;
 import javafx.scene.transform.Affine;
 import javafx.scene.transform.Rotate;
 import javafx.scene.transform.Translate;
@@ -41,6 +39,12 @@ public class kinematic3DApp extends Application {
     private MatrixDisplayHUD hud;
 
     private int selectedJointIndex = 0;
+
+    // IK and Trajectory Generator fields
+    private final Sphere targetSphere = new Sphere(1.2);
+    private final IKSolver ikSolver = new IKSolver();
+    private double[] targetPos = new double[]{10.0, 5.0, 5.0};
+    private AnimationTimer playbackTimer;
 
     private Node createSelectionHighlightBox(double size) {
         Box box = new Box(size, size, size);

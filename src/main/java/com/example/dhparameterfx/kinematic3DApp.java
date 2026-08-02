@@ -141,33 +141,41 @@ public class kinematic3DApp extends Application {
     }
 
     private void runIKAndAnimate() {
-
-        // 1. Record starting angles
-        double[] qStart = new double[dhModels.size()];
-
-        for (int i = 0; i < dhModels.size(); i++) {
-
-            qStart[i] = dhModels.get(i).getTheta();
-
+        // 1. Workspace Reachability Guard
+        if (!ikSolver.isTargetReachable(dhModels, targetPos)) {
+            showWarningDialog("Unreachable Target",
+                    "The selected target (" + String.format("%.1f, %.1f, %.1f", targetPos[0], targetPos[1], targetPos[2]) +
+                            ") is outside the robot's maximum workspace volume.");
+            return;
         }
 
-        // 2. Solve IK
-        boolean converged = ikSolver.solve(dhModels, targetPos, 250, 0.05);
+        // 2. Record starting angles
+        double[] qStart = new double[dhModels.size()];
+        for (int i = 0; i < dhModels.size(); i++) {
+            qStart[i] = dhModels.get(i).getTheta();
+        }
 
-        // 3. Record target angles & restore start angles for animation
+        // 3. Solve IK
+        boolean converged = ikSolver.solve(dhModels, targetPos, 300, 0.1);
+
+        if (!converged) {
+            showWarningDialog("IK Convergence Failure",
+                    "Target position could not be reached precisely due to joint angle limits or a singularity posture.");
+            return;
+        }
+
+        // 4. Record target angles & restore start angles for smooth animation
         double[] qEnd = new double[dhModels.size()];
         for (int i = 0; i < dhModels.size(); i++) {
-
             qEnd[i] = dhModels.get(i).getTheta();
             dhModels.get(i).setTheta(qStart[i]);
-
         }
 
         if (playbackTimer != null) playbackTimer.stop();
 
-        // 4. Smooth trajectory playback over 2.0 seconds
+        // 5. Execute trajectory animation
         final long startTime = System.nanoTime();
-        final double durationNs = 2.0 * 1e9;
+        final double durationNs = 2.0 * 1e9; // 2 seconds
 
         playbackTimer = new AnimationTimer() {
             @Override
@@ -190,6 +198,14 @@ public class kinematic3DApp extends Application {
             }
         };
         playbackTimer.start();
+    }
+
+    private void showWarningDialog(String title, String message) {
+        Alert alert = new Alert(Alert.AlertType.WARNING);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
     }
 
     private VBox createControlPanel(Stage primaryStage) {

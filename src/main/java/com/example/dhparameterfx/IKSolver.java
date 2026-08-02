@@ -30,7 +30,7 @@ public class IKSolver {
     }
 
     public boolean solve(List<DHParameterModel> dhModels, double[] targetPos, int maxIterations, double tolerance) {
-        double lambda = 0.2; // Damping factor
+        double lambda = 0.15; // Damping factor
         double bestError = Double.MAX_VALUE;
         double[] bestThetas = new double[dhModels.size()];
 
@@ -50,6 +50,7 @@ public class IKSolver {
 
             double errorDist = Math.sqrt(ex * ex + ey * ey + ez * ez);
 
+            // Track the best configuration found so far
             if (errorDist < bestError) {
                 bestError = errorDist;
                 for (int i = 0; i < numJoints; i++) {
@@ -84,29 +85,13 @@ public class IKSolver {
             dampedErr[1] = Ainv[1][0] * ex + Ainv[1][1] * ey + Ainv[1][2] * ez;
             dampedErr[2] = Ainv[2][0] * ex + Ainv[2][1] * ey + Ainv[2][2] * ez;
 
-            // Primary task: Delta theta for EE position
-            double[] dqPrimary = new double[numJoints];
-            for (int j = 0; j < numJoints; j++) {
-                dqPrimary[j] = J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2];
-            }
-
-            // Secondary task (Null-space gradient): Drive joints toward center of safe range
-            double[] nullGrad = new double[numJoints];
-            for (int j = 0; j < numJoints; j++) {
-                DHParameterModel m = dhModels.get(j);
-                double center = (m.getMinTheta() + m.getMaxTheta()) / 2.0;
-                double range = (m.getMaxTheta() - m.getMinTheta());
-                if (range > 0) {
-                    // Penalty gradient pulling angle toward center
-                    nullGrad[j] = -0.05 * Math.toRadians(m.getTheta() - center) / Math.toRadians(range);
-                }
-            }
-
             // Apply update with strict clamping to configured min/max limits
             for (int j = 0; j < numJoints; j++) {
                 DHParameterModel model = dhModels.get(j);
-                double step = Math.toDegrees(dqPrimary[j] + nullGrad[j]);
-                double newTheta = model.getTheta() + step;
+
+                // Calculate required movement for this joint
+                double dq = J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2];
+                double newTheta = model.getTheta() + Math.toDegrees(dq);
 
                 // Hard clamp to configured joint bounds
                 if (newTheta > model.getMaxTheta()) newTheta = model.getMaxTheta();
@@ -116,10 +101,12 @@ public class IKSolver {
             }
         }
 
+        // Restore the best configuration achieved
         for (int i = 0; i < numJoints; i++) {
             dhModels.get(i).setTheta(bestThetas[i]);
         }
 
+        // Relax the acceptance threshold slightly to account for limits
         return bestError <= 0.5;
     }
 

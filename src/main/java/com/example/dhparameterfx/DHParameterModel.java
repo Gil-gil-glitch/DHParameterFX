@@ -10,8 +10,8 @@ public class DHParameterModel {
     private final DoubleProperty theta = new SimpleDoubleProperty();
 
     // Joint Limits (Defaults: -135° to 135° to avoid self-collision overlaps)
-    private final DoubleProperty minTheta = new SimpleDoubleProperty(-135.0);
-    private final DoubleProperty maxTheta = new SimpleDoubleProperty(135.0);
+    private final DoubleProperty minTheta = new SimpleDoubleProperty(-270.0);
+    private final DoubleProperty maxTheta = new SimpleDoubleProperty(270.0);
 
     public DHParameterModel(double a, double alpha, double d, double theta) {
         this.a.set(a);

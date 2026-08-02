@@ -8,50 +8,33 @@ public class IKSolver {
     private final ForwardKinematicsEngine fkEngine = new ForwardKinematicsEngine();
     private static final double STEP_SIZE = 1e-4;
 
-    /**
-     * Estimates maximum kinematic reach from base to end-effector.
-     */
     public boolean isTargetReachable(List<DHParameterModel> dhModels, double[] targetPos) {
-
         if (dhModels.isEmpty()) return false;
 
-        // Compute total link length capacity
         double maxReach = 0;
         for (DHParameterModel m : dhModels) {
             maxReach += Math.abs(m.getA()) + Math.abs(m.getD());
-
         }
 
-        // Get actual base position from Forward Kinematics
         List<DHParameter> dhParams = getCurrentDHParams(dhModels);
         List<Matrix4x4> transforms = fkEngine.computeCumulativeTransforms(dhParams);
 
-        double[] basePos = new double[]{0, 0, 0};
-        if (!transforms.isEmpty()) {
-
-            basePos = transforms.get(0).getPosition();
-
-        }
+        double[] basePos = transforms.isEmpty() ? new double[]{0, 0, 0} : transforms.get(0).getPosition();
 
         double dx = targetPos[0] - basePos[0];
         double dy = targetPos[1] - basePos[1];
         double dz = targetPos[2] - basePos[2];
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-
-        return dist <= (maxReach * 1.1); // Allow a 10% safety margin for offset alignment
+        return dist <= (maxReach * 1.05);
     }
 
-    /**
-     * Solves IK iteratively using Damped Least Squares (DLS).
-     * Updates dhModels in-place to the best achieved pose.
-     *
-     * @return true if target was reached within tolerance, false if stopped at closest posture
-     */
     public boolean solve(List<DHParameterModel> dhModels, double[] targetPos, int maxIterations, double tolerance) {
-        double lambda = 0.15; // Damping constant
+        double lambda = 0.2; // Damping factor
         double bestError = Double.MAX_VALUE;
         double[] bestThetas = new double[dhModels.size()];
+
+        int numJoints = dhModels.size();
 
         for (int iter = 0; iter < maxIterations; iter++) {
             List<DHParameter> dhParams = getCurrentDHParams(dhModels);
@@ -67,23 +50,20 @@ public class IKSolver {
 
             double errorDist = Math.sqrt(ex * ex + ey * ey + ez * ez);
 
-            // Track best posture achieved
             if (errorDist < bestError) {
                 bestError = errorDist;
-                for (int i = 0; i < dhModels.size(); i++) {
+                for (int i = 0; i < numJoints; i++) {
                     bestThetas[i] = dhModels.get(i).getTheta();
                 }
             }
 
-            // Convergence check
             if (errorDist < tolerance) {
                 return true;
             }
 
-            int numJoints = dhModels.size();
             double[][] J = computePositionJacobian(dhModels, currentPos);
 
-            // Damped Least Squares: J_damped = J^T * (J * J^T + lambda^2 * I)^-1
+            // Compute Damped Pseudoinverse J_damped = J^T * (J * J^T + lambda^2 * I)^-1
             double[][] A = new double[3][3];
             for (int r = 0; r < 3; r++) {
                 for (int c = 0; c < 3; c++) {
@@ -104,24 +84,42 @@ public class IKSolver {
             dampedErr[1] = Ainv[1][0] * ex + Ainv[1][1] * ey + Ainv[1][2] * ez;
             dampedErr[2] = Ainv[2][0] * ex + Ainv[2][1] * ey + Ainv[2][2] * ez;
 
+            // Primary task: Delta theta for EE position
+            double[] dqPrimary = new double[numJoints];
             for (int j = 0; j < numJoints; j++) {
-                double dq = J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2];
-                double newTheta = dhModels.get(j).getTheta() + Math.toDegrees(dq);
+                dqPrimary[j] = J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2];
+            }
 
-                // Angle wrapping [-180, 180]
-                while (newTheta > 180) newTheta -= 360;
-                while (newTheta < -180) newTheta += 360;
+            // Secondary task (Null-space gradient): Drive joints toward center of safe range
+            double[] nullGrad = new double[numJoints];
+            for (int j = 0; j < numJoints; j++) {
+                DHParameterModel m = dhModels.get(j);
+                double center = (m.getMinTheta() + m.getMaxTheta()) / 2.0;
+                double range = (m.getMaxTheta() - m.getMinTheta());
+                if (range > 0) {
+                    // Penalty gradient pulling angle toward center
+                    nullGrad[j] = -0.05 * Math.toRadians(m.getTheta() - center) / Math.toRadians(range);
+                }
+            }
 
-                dhModels.get(j).setTheta(newTheta);
+            // Apply update with strict clamping to configured min/max limits
+            for (int j = 0; j < numJoints; j++) {
+                DHParameterModel model = dhModels.get(j);
+                double step = Math.toDegrees(dqPrimary[j] + nullGrad[j]);
+                double newTheta = model.getTheta() + step;
+
+                // Hard clamp to configured joint bounds
+                if (newTheta > model.getMaxTheta()) newTheta = model.getMaxTheta();
+                if (newTheta < model.getMinTheta()) newTheta = model.getMinTheta();
+
+                model.setTheta(newTheta);
             }
         }
 
-        // If exact tolerance wasn't met, restore best configuration achieved
-        for (int i = 0; i < dhModels.size(); i++) {
+        for (int i = 0; i < numJoints; i++) {
             dhModels.get(i).setTheta(bestThetas[i]);
         }
 
-        // Return true if close enough (within 0.5 units) to proceed with animation
         return bestError <= 0.5;
     }
 

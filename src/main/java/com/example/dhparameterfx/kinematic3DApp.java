@@ -2,6 +2,7 @@ package com.example.dhparameterfx;
 
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
+import javafx.beans.property.DoubleProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Point3D;
@@ -11,28 +12,29 @@ import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.PhongMaterial;
-import javafx.scene.shape.*;
+import javafx.scene.shape.Box;
+import javafx.scene.shape.CullFace;
+import javafx.scene.shape.Cylinder;
+import javafx.scene.shape.DrawMode;
+import javafx.scene.shape.Sphere;
 import javafx.scene.transform.Affine;
 import javafx.scene.transform.Rotate;
 import javafx.scene.transform.Translate;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
-import java.util.ArrayList;
-import java.util.List;
-
-import javafx.stage.FileChooser;
 import java.io.File;
 import java.io.PrintWriter;
 import java.nio.file.Files;
-
-import javafx.beans.property.DoubleProperty;
-import javafx.scene.control.TextField;
+import java.util.ArrayList;
+import java.util.List;
 
 public class kinematic3DApp extends Application {
 
     private final Group world = new Group();
     private final Group robotGroup = new Group();
     private final ForwardKinematicsEngine fkEngine = new ForwardKinematicsEngine();
+    private final IKSolver ikSolver = new IKSolver();
 
     private final List<DHParameterModel> dhModels = new ArrayList<>();
     private VBox controlsContainer;
@@ -40,20 +42,16 @@ public class kinematic3DApp extends Application {
 
     private int selectedJointIndex = 0;
 
-    // IK and Trajectory Generator fields
+    // IK & Trajectory state
     private final Sphere targetSphere = new Sphere(1.2);
-    private final IKSolver ikSolver = new IKSolver();
-    private double[] targetPos = new double[]{10.0, 5.0, 5.0};
+    private final double[] targetPos = new double[]{10.0, 5.0, 5.0};
     private AnimationTimer playbackTimer;
 
     private Node createSelectionHighlightBox(double size) {
         Box box = new Box(size, size, size);
         box.setDrawMode(DrawMode.LINE);
         box.setCullFace(CullFace.NONE);
-
-        PhongMaterial blueWireframe = new PhongMaterial(Color.web("#61afef"));
-        box.setMaterial(blueWireframe);
-
+        box.setMaterial(new PhongMaterial(Color.web("#61afef")));
         return box;
     }
 
@@ -71,6 +69,11 @@ public class kinematic3DApp extends Application {
         robotGroup.getTransforms().add(new Rotate(270, Rotate.Z_AXIS));
         world.getChildren().add(robotGroup);
 
+        // Target Sphere
+        targetSphere.setMaterial(new PhongMaterial(Color.web("#e06c75")));
+        robotGroup.getChildren().add(targetSphere);
+        updateTargetSpherePosition();
+
         // Lighting
         AmbientLight ambient = new AmbientLight(Color.color(0.4, 0.4, 0.4));
         PointLight pointLight = new PointLight(Color.WHITE);
@@ -79,7 +82,7 @@ public class kinematic3DApp extends Application {
         pointLight.setTranslateZ(-50);
         world.getChildren().addAll(ambient, pointLight);
 
-        // Default 3 Joint Robot
+        // Default 3-Joint Robot
         dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 30.0));
         dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 40.0));
         dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -25.0));
@@ -102,7 +105,7 @@ public class kinematic3DApp extends Application {
         VBox sidePanel = createControlPanel(primaryStage);
         root.setRight(sidePanel);
 
-        Scene scene = new Scene(root, 1120, 700);
+        Scene scene = new Scene(root, 1150, 750);
 
         subScene.setOnMouseClicked(event -> {
             Node picked = event.getPickResult().getIntersectedNode();
@@ -113,14 +116,11 @@ public class kinematic3DApp extends Application {
 
             if (current instanceof AxisGroup axis) {
                 Object tag = axis.getUserData();
-
                 if (tag instanceof Integer jointIdx) {
                     selectedJointIndex = jointIdx;
                     rebuildUIControls();
                     updateRobot3D();
-
                 }
-
             }
         });
 
@@ -129,21 +129,78 @@ public class kinematic3DApp extends Application {
         rebuildUIControls();
         updateRobot3D();
 
-        primaryStage.setTitle("JavaFX DH Parameter Calculator");
+        primaryStage.setTitle("JavaFX DH Parameter & Kinematics Workspace");
         primaryStage.setScene(scene);
         primaryStage.show();
     }
 
+    private void updateTargetSpherePosition() {
+        targetSphere.setTranslateX(targetPos[0]);
+        targetSphere.setTranslateY(targetPos[1]);
+        targetSphere.setTranslateZ(targetPos[2]);
+    }
+
+    private void runIKAndAnimate() {
+
+        // 1. Record starting angles
+        double[] qStart = new double[dhModels.size()];
+
+        for (int i = 0; i < dhModels.size(); i++) {
+
+            qStart[i] = dhModels.get(i).getTheta();
+
+        }
+
+        // 2. Solve IK
+        boolean converged = ikSolver.solve(dhModels, targetPos, 250, 0.05);
+
+        // 3. Record target angles & restore start angles for animation
+        double[] qEnd = new double[dhModels.size()];
+        for (int i = 0; i < dhModels.size(); i++) {
+
+            qEnd[i] = dhModels.get(i).getTheta();
+            dhModels.get(i).setTheta(qStart[i]);
+
+        }
+
+        if (playbackTimer != null) playbackTimer.stop();
+
+        // 4. Smooth trajectory playback over 2.0 seconds
+        final long startTime = System.nanoTime();
+        final double durationNs = 2.0 * 1e9;
+
+        playbackTimer = new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                double elapsed = now - startTime;
+                double tNorm = elapsed / durationNs;
+
+                if (tNorm >= 1.0) {
+                    tNorm = 1.0;
+                    stop();
+                }
+
+                double[] currentQ = TrajectoryPlanner.interpolateCubic(qStart, qEnd, tNorm);
+                for (int i = 0; i < dhModels.size(); i++) {
+                    dhModels.get(i).setTheta(currentQ[i]);
+                }
+
+                rebuildUIControls();
+                updateRobot3D();
+            }
+        };
+        playbackTimer.start();
+    }
+
     private VBox createControlPanel(Stage primaryStage) {
         VBox panel = new VBox(10);
-        panel.setPrefWidth(320);
+        panel.setPrefWidth(340);
         panel.setPadding(new Insets(15));
         panel.setStyle("-fx-background-color: #2b2b36; -fx-text-fill: white;");
 
         Label header = new Label("Kinematic Chain Setup");
         header.setStyle("-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: white;");
 
-        // Add Joint Button
         Button addBtn = new Button("+ Add Joint");
         addBtn.setMaxWidth(Double.MAX_VALUE);
         addBtn.setStyle("-fx-background-color: #98c379; -fx-text-fill: #1e1e24; -fx-font-weight: bold;");
@@ -154,7 +211,7 @@ public class kinematic3DApp extends Application {
             updateRobot3D();
         });
 
-        // Preset Selection Toolbar
+        // Presets Toolbar
         Label presetsLabel = new Label("Presets:");
         presetsLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #abb2bf; -fx-font-weight: bold;");
 
@@ -170,10 +227,9 @@ public class kinematic3DApp extends Application {
         HBox.setHgrow(pumaBtn, Priority.ALWAYS);
         pumaBtn.setStyle("-fx-background-color: #3b3b4d; -fx-text-fill: #e5c07b; -fx-border-color: #e5c07b; -fx-border-radius: 3;");
         pumaBtn.setOnAction(e -> loadPuma560Preset());
-
         presetBar.getChildren().addAll(scaraBtn, pumaBtn);
 
-        // File I/O Bar
+        // File I/O Toolbar
         Label fileLabel = new Label("File I/O:");
         fileLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #abb2bf; -fx-font-weight: bold;");
 
@@ -189,44 +245,94 @@ public class kinematic3DApp extends Application {
         HBox.setHgrow(importBtn, Priority.ALWAYS);
         importBtn.setStyle("-fx-background-color: #3b3b4d; -fx-text-fill: #c678dd; -fx-border-color: #c678dd; -fx-border-radius: 3;");
         importBtn.setOnAction(e -> importFromJson(primaryStage));
-
         fileBar.getChildren().addAll(exportBtn, importBtn);
 
-        controlsContainer = new VBox(15);
+        // IK Target Controls Panel
+        Label ikLabel = new Label("IK Target Workspace:");
+        ikLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #abb2bf; -fx-font-weight: bold;");
+
+        VBox ikBox = new VBox(6);
+        ikBox.setStyle("-fx-background-color: #21252b; -fx-padding: 10; -fx-background-radius: 5; -fx-border-color: #61afef; -fx-border-radius: 5;");
+
+        HBox targetXRow = createTargetRow("Target X:", targetPos, 0);
+        HBox targetYRow = createTargetRow("Target Y:", targetPos, 1);
+        HBox targetZRow = createTargetRow("Target Z:", targetPos, 2);
+
+        Button planMotionBtn = new Button("Move to Target (IK + Trajectory)");
+        planMotionBtn.setMaxWidth(Double.MAX_VALUE);
+        planMotionBtn.setStyle("-fx-background-color: #61afef; -fx-text-fill: #1e1e24; -fx-font-weight: bold;");
+        planMotionBtn.setOnAction(e -> runIKAndAnimate());
+
+        ikBox.getChildren().addAll(targetXRow, targetYRow, targetZRow, planMotionBtn);
+
+        controlsContainer = new VBox(12);
         ScrollPane scrollPane = new ScrollPane(controlsContainer);
         scrollPane.setFitToWidth(true);
         scrollPane.setStyle("-fx-background: transparent; -fx-background-color: transparent;");
         VBox.setVgrow(scrollPane, Priority.ALWAYS);
 
         panel.getChildren().addAll(
-                header,
-                addBtn,
-                presetsLabel,
-                presetBar,
-                fileLabel,
-                fileBar,
-                new Separator(Orientation.HORIZONTAL),
-                scrollPane
+                header, addBtn, presetsLabel, presetBar, fileLabel, fileBar, ikLabel, ikBox,
+                new Separator(Orientation.HORIZONTAL), scrollPane
         );
 
         return panel;
+    }
+
+    private HBox createTargetRow(String label, double[] posArray, int index) {
+        HBox row = new HBox(8);
+        row.setAlignment(Pos.CENTER_LEFT);
+
+        Label lbl = new Label(label);
+        lbl.setPrefWidth(65);
+        lbl.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 11px;");
+
+        Slider slider = new Slider(-25, 25, posArray[index]);
+        HBox.setHgrow(slider, Priority.ALWAYS);
+
+        TextField txt = new TextField(String.format("%.2f", posArray[index]));
+        txt.setPrefWidth(65);
+        txt.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e06c75; -fx-font-size: 11px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+
+        slider.valueProperty().addListener((o, oldV, newV) -> {
+            if (!txt.isFocused()) {
+                posArray[index] = newV.doubleValue();
+                txt.setText(String.format("%.2f", newV.doubleValue()));
+                updateTargetSpherePosition();
+            }
+        });
+
+        Runnable applyTxt = () -> {
+            try {
+                double parsed = ExpressionParser.parse(txt.getText());
+                posArray[index] = parsed;
+                slider.setValue(parsed);
+                updateTargetSpherePosition();
+            } catch (Exception ex) {
+                txt.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e06c75; -fx-font-size: 11px; -fx-border-color: #e06c75; -fx-border-radius: 3;");
+            }
+        };
+
+        txt.setOnAction(e -> applyTxt.run());
+        txt.focusedProperty().addListener((o, wasF, isF) -> { if (!isF) applyTxt.run(); });
+
+        row.getChildren().addAll(lbl, slider, txt);
+        return row;
     }
 
     private void rebuildUIControls() {
         controlsContainer.getChildren().clear();
 
         for (int i = 0; i < dhModels.size(); i++) {
-
             int index = i;
             DHParameterModel model = dhModels.get(i);
 
             VBox card = new VBox(8);
-
             boolean isSelected = (i == selectedJointIndex);
             String borderStyle = isSelected ? "-fx-border-color: #61afef; -fx-border-width: 2px; -fx-border-radius: 5;" : "";
             String bgStyle = isSelected ? "-fx-background-color: #2c313a;" : "-fx-background-color: #3b3b4d;";
 
-            card.setStyle(STR."\{bgStyle} -fx-padding: 10; -fx-background-radius: 5; \{borderStyle}");
+            card.setStyle(bgStyle + " -fx-padding: 10; -fx-background-radius: 5; " + borderStyle);
 
             card.setOnMouseClicked(e -> {
                 selectedJointIndex = index;
@@ -236,8 +342,8 @@ public class kinematic3DApp extends Application {
 
             HBox cardHeader = new HBox();
             cardHeader.setAlignment(Pos.CENTER_LEFT);
-            Label title = new Label(STR."Joint \{i + 1}\{isSelected ? " (Selected)" : ""}");
-            title.setStyle(STR."-fx-font-weight: bold; -fx-text-fill: \{isSelected ? "#61afef" : "#abb2bf"};");
+            Label title = new Label("Joint " + (i + 1) + (isSelected ? " (Selected)" : ""));
+            title.setStyle("-fx-font-weight: bold; -fx-text-fill: " + (isSelected ? "#61afef" : "#abb2bf") + ";");
 
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -260,8 +366,8 @@ public class kinematic3DApp extends Application {
             card.getChildren().addAll(
                     cardHeader,
                     createSliderRow("a (Length):", -20, 20, model.aProperty(), false),
-                    createSliderRow("α (Twist °):", -180, 180, model.alphaProperty(), true ),
-                    createSliderRow("d (Offset):", -20, 20, model.dProperty(), false ),
+                    createSliderRow("α (Twist °):", -180, 180, model.alphaProperty(), true),
+                    createSliderRow("d (Offset):", -20, 20, model.dProperty(), false),
                     createSliderRow("θ (Angle °):", -180, 180, model.thetaProperty(), true)
             );
 
@@ -270,7 +376,6 @@ public class kinematic3DApp extends Application {
     }
 
     private HBox createSliderRow(String label, double min, double max, DoubleProperty prop, boolean allowPiDegrees) {
-
         HBox row = new HBox(8);
         row.setAlignment(Pos.CENTER_LEFT);
 
@@ -283,10 +388,8 @@ public class kinematic3DApp extends Application {
 
         TextField txtInput = new TextField(String.format("%.2f", prop.get()));
         txtInput.setPrefWidth(65);
-        txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e5c07b; " +
-                "-fx-font-size: 11px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+        txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e5c07b; -fx-font-size: 11px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
 
-        // Slider -> Model & TextField
         slider.valueProperty().addListener((obs, oldVal, newVal) -> {
             if (!txtInput.isFocused()) {
                 prop.set(newVal.doubleValue());
@@ -295,33 +398,22 @@ public class kinematic3DApp extends Application {
             }
         });
 
-        // TextField -> Model & Slider (Triggers on Enter or focus loss)
         Runnable applyTextVal = () -> {
             try {
                 String rawText = txtInput.getText();
                 double parsedVal = ExpressionParser.parse(rawText);
 
-                // If user typed a pi expression into an angle box (alpha/theta), automatically convert radians to degrees
                 if (allowPiDegrees && rawText.toLowerCase().contains("pi")) {
-
                     parsedVal = Math.toDegrees(parsedVal);
-
                 }
 
                 prop.set(parsedVal);
                 slider.setValue(parsedVal);
-                txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e5c07b; " +
-                        "-fx-font-size: 11px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+                txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e5c07b; -fx-font-size: 11px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
                 updateRobot3D();
-
             } catch (Exception ex) {
-
-                // Highlight box red if parsing fails
-                txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e06c75; " +
-                        "-fx-font-size: 11px; -fx-border-color: #e06c75; -fx-border-radius: 3;");
-
+                txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e06c75; -fx-font-size: 11px; -fx-border-color: #e06c75; -fx-border-radius: 3;");
             }
-
         };
 
         txtInput.setOnAction(e -> applyTextVal.run());
@@ -335,6 +427,7 @@ public class kinematic3DApp extends Application {
 
     private void updateRobot3D() {
         robotGroup.getChildren().clear();
+        robotGroup.getChildren().add(targetSphere);
 
         List<DHParameter> dhParams = new ArrayList<>();
         for (DHParameterModel model : dhModels) {
@@ -343,7 +436,6 @@ public class kinematic3DApp extends Application {
 
         List<Matrix4x4> transforms = fkEngine.computeCumulativeTransforms(dhParams);
 
-        // Update HUD with cumulative transform of end-effector (last matrix)
         if (!transforms.isEmpty() && hud != null) {
             hud.update(transforms.get(transforms.size() - 1));
         }
@@ -360,7 +452,6 @@ public class kinematic3DApp extends Application {
                 Node highlightBox = createSelectionHighlightBox(4.5);
                 applyMatrixToNode(highlightBox, mat);
                 robotGroup.getChildren().add(highlightBox);
-
             }
 
             if (i > 0) {
@@ -372,11 +463,8 @@ public class kinematic3DApp extends Application {
 
                 Node linkCylinder = createLinkCylinder(start, end, 0.4, Color.GRAY);
                 robotGroup.getChildren().add(linkCylinder);
-
             }
-
         }
-
     }
 
     private void applyMatrixToNode(Node node, Matrix4x4 m) {
@@ -411,73 +499,45 @@ public class kinematic3DApp extends Application {
         return cylinder;
     }
 
-    /**
-     * Loads a standard 3-DOF SCARA robot geometry into the model list.
-     */
     private void loadScaraPreset() {
         dhModels.clear();
-        // Joint 1: Base rotation
         dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 0.0));
-        // Joint 2: Elbow rotation
         dhModels.add(new DHParameterModel(8.0, 180.0, 0.0, 0.0));
-        // Joint 3: Wrist translation / offset
         dhModels.add(new DHParameterModel(0.0, 0.0, 5.0, 0.0));
-
         selectedJointIndex = 0;
         rebuildUIControls();
         updateRobot3D();
     }
 
-    /**
-     * Loads the standard 6-DOF PUMA 560 robot geometry into the model list.
-     */
     private void loadPuma560Preset() {
         dhModels.clear();
-        // Joint 1: Waist rotation
         dhModels.add(new DHParameterModel(0.0, -90.0, 0.0, 0.0));
-        // Joint 2: Shoulder pitch
         dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -30.0));
-        // Joint 3: Elbow pitch
         dhModels.add(new DHParameterModel(2.0, 90.0, 0.0, 45.0));
-        // Joint 4: Wrist roll
         dhModels.add(new DHParameterModel(0.0, -90.0, 8.0, 0.0));
-        // Joint 5: Wrist pitch
         dhModels.add(new DHParameterModel(0.0, 90.0, 0.0, 30.0));
-        // Joint 6: Tool roll
         dhModels.add(new DHParameterModel(0.0, 0.0, 2.0, 0.0));
-
         selectedJointIndex = 0;
         rebuildUIControls();
         updateRobot3D();
     }
 
-    /**
-     * Exports current DH Parameter models to a JSON file.
-     */
     private void exportToJson(Stage stage) {
         FileChooser fileChooser = new FileChooser();
         fileChooser.setTitle("Export DH Table to JSON");
-        fileChooser.getExtensionFilters().add(
-                new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json")
-        );
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json"));
         fileChooser.setInitialFileName("robot_dh_config.json");
 
         File file = fileChooser.showSaveDialog(stage);
         if (file == null) return;
 
-        StringBuilder json = new StringBuilder();
-        json.append("[\n");
-
+        StringBuilder json = new StringBuilder("[\n");
         for (int i = 0; i < dhModels.size(); i++) {
-
             DHParameterModel model = dhModels.get(i);
-            json.append(String.format(
-                    "  { \"a\": %.4f, \"alpha\": %.4f, \"d\": %.4f, \"theta\": %.4f }",
-                    model.getA(), model.getAlpha(), model.getD(), model.getTheta()
-            ));
+            json.append(String.format("  { \"a\": %.4f, \"alpha\": %.4f, \"d\": %.4f, \"theta\": %.4f }",
+                    model.getA(), model.getAlpha(), model.getD(), model.getTheta()));
             if (i < dhModels.size() - 1) json.append(",");
             json.append("\n");
-
         }
         json.append("]");
 
@@ -486,18 +546,12 @@ public class kinematic3DApp extends Application {
         } catch (Exception e) {
             showErrorDialog("Export Error", "Failed to save file: " + e.getMessage());
         }
-
     }
 
-    /**
-     * Imports DH Parameter models from a JSON file.
-     */
     private void importFromJson(Stage stage) {
         FileChooser fileChooser = new FileChooser();
         fileChooser.setTitle("Import DH Table from JSON");
-        fileChooser.getExtensionFilters().add(
-                new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json")
-        );
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON Files (*.json)", "*.json"));
 
         File file = fileChooser.showOpenDialog(stage);
         if (file == null) return;
@@ -505,11 +559,10 @@ public class kinematic3DApp extends Application {
         try {
             String content = Files.readString(file.toPath()).trim();
             if (!content.startsWith("[") || !content.endsWith("]")) {
-                throw new IllegalArgumentException("Invalid JSON format: Expected array of joint objects.");
+                throw new IllegalArgumentException("Invalid JSON format.");
             }
 
             List<DHParameterModel> newModels = new ArrayList<>();
-
             String inner = content.substring(1, content.length() - 1).trim();
             String[] objects = inner.split("(?<=\\}),\\s*(?=\\{)");
 
@@ -518,9 +571,7 @@ public class kinematic3DApp extends Application {
                 double alpha = extractJsonDouble(objStr, "alpha");
                 double d = extractJsonDouble(objStr, "d");
                 double theta = extractJsonDouble(objStr, "theta");
-
                 newModels.add(new DHParameterModel(a, alpha, d, theta));
-
             }
 
             if (!newModels.isEmpty()) {
@@ -529,34 +580,24 @@ public class kinematic3DApp extends Application {
                 selectedJointIndex = 0;
                 rebuildUIControls();
                 updateRobot3D();
-
             }
-
         } catch (Exception e) {
             showErrorDialog("Import Error", "Failed to load DH table: " + e.getMessage());
-
         }
     }
 
-    // Method to extract double values from simple JSON keys
     private double extractJsonDouble(String jsonObj, String key) {
         java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\"" + key + "\"\\s*:\\s*([-+]?[0-9]*\\.?[0-9]+)");
         java.util.regex.Matcher matcher = pattern.matcher(jsonObj);
-        if (matcher.find()) {
-            return Double.parseDouble(matcher.group(1));
-        }
-        return 0.0;
+        return matcher.find() ? Double.parseDouble(matcher.group(1)) : 0.0;
     }
 
-    // Method to alert dialog for file errors
     private void showErrorDialog(String title, String message) {
-
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.setTitle(title);
         alert.setHeaderText(null);
         alert.setContentText(message);
         alert.showAndWait();
-
     }
 
     public static void main(String[] args) {

@@ -27,6 +27,9 @@ import java.io.File;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 
+import javafx.beans.property.DoubleProperty;
+import javafx.scene.control.TextField;
+
 public class kinematic3DApp extends Application {
 
     private final Group world = new Group();
@@ -252,19 +255,21 @@ public class kinematic3DApp extends Application {
 
             card.getChildren().addAll(
                     cardHeader,
-                    createSliderRow("a (Length):", -20, 20, model.aProperty()),
-                    createSliderRow("α (Twist °):", -180, 180, model.alphaProperty()),
-                    createSliderRow("d (Offset):", -20, 20, model.dProperty()),
-                    createSliderRow("θ (Angle °):", -180, 180, model.thetaProperty())
+                    createSliderRow("a (Length):", -20, 20, model.aProperty(), false),
+                    createSliderRow("α (Twist °):", -180, 180, model.alphaProperty(), true ),
+                    createSliderRow("d (Offset):", -20, 20, model.dProperty(), false ),
+                    createSliderRow("θ (Angle °):", -180, 180, model.thetaProperty(), true)
             );
 
             controlsContainer.getChildren().add(card);
         }
     }
 
-    private HBox createSliderRow(String label, double min, double max, javafx.beans.property.DoubleProperty prop) {
+    private HBox createSliderRow(String label, double min, double max, DoubleProperty prop, boolean allowPiDegrees) {
+
         HBox row = new HBox(8);
         row.setAlignment(Pos.CENTER_LEFT);
+
         Label lbl = new Label(label);
         lbl.setPrefWidth(75);
         lbl.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 11px;");
@@ -272,17 +277,55 @@ public class kinematic3DApp extends Application {
         Slider slider = new Slider(min, max, prop.get());
         HBox.setHgrow(slider, Priority.ALWAYS);
 
-        Label valueLbl = new Label(String.format("%.1f", prop.get()));
-        valueLbl.setPrefWidth(40);
-        valueLbl.setStyle("-fx-text-fill: #e5c07b; -fx-font-size: 11px;");
+        TextField txtInput = new TextField(String.format("%.2f", prop.get()));
+        txtInput.setPrefWidth(65);
+        txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e5c07b; " +
+                "-fx-font-size: 11px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
 
+        // Slider -> Model & TextField
         slider.valueProperty().addListener((obs, oldVal, newVal) -> {
-            prop.set(newVal.doubleValue());
-            valueLbl.setText(String.format("%.1f", newVal.doubleValue()));
-            updateRobot3D();
+            if (!txtInput.isFocused()) {
+                prop.set(newVal.doubleValue());
+                txtInput.setText(String.format("%.2f", newVal.doubleValue()));
+                updateRobot3D();
+            }
         });
 
-        row.getChildren().addAll(lbl, slider, valueLbl);
+        // TextField -> Model & Slider (Triggers on Enter or focus loss)
+        Runnable applyTextVal = () -> {
+            try {
+                String rawText = txtInput.getText();
+                double parsedVal = ExpressionParser.parse(rawText);
+
+                // If user typed a pi expression into an angle box (alpha/theta), automatically convert radians to degrees
+                if (allowPiDegrees && rawText.toLowerCase().contains("pi")) {
+
+                    parsedVal = Math.toDegrees(parsedVal);
+
+                }
+
+                prop.set(parsedVal);
+                slider.setValue(parsedVal);
+                txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e5c07b; " +
+                        "-fx-font-size: 11px; -fx-border-color: #4b5263; -fx-border-radius: 3;");
+                updateRobot3D();
+
+            } catch (Exception ex) {
+
+                // Highlight box red if parsing fails
+                txtInput.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e06c75; " +
+                        "-fx-font-size: 11px; -fx-border-color: #e06c75; -fx-border-radius: 3;");
+
+            }
+
+        };
+
+        txtInput.setOnAction(e -> applyTextVal.run());
+        txtInput.focusedProperty().addListener((obs, wasFocused, isFocused) -> {
+            if (!isFocused) applyTextVal.run();
+        });
+
+        row.getChildren().addAll(lbl, slider, txtInput);
         return row;
     }
 

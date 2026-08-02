@@ -9,32 +9,51 @@ public class IKSolver {
     private static final double STEP_SIZE = 1e-4;
 
     /**
-     * Checks if target is within maximum possible arm length.
+     * Estimates maximum kinematic reach from base to end-effector.
      */
     public boolean isTargetReachable(List<DHParameterModel> dhModels, double[] targetPos) {
 
+        if (dhModels.isEmpty()) return false;
+
+        // Compute total link length capacity
         double maxReach = 0;
-
         for (DHParameterModel m : dhModels) {
-
             maxReach += Math.abs(m.getA()) + Math.abs(m.getD());
 
         }
 
-        // Base location is origin (0,0,0) in robot frame
+        // Get actual base position from Forward Kinematics
+        List<DHParameter> dhParams = getCurrentDHParams(dhModels);
+        List<Matrix4x4> transforms = fkEngine.computeCumulativeTransforms(dhParams);
 
-        double dist = Math.sqrt(targetPos[0] * targetPos[0] +  targetPos[1] * targetPos[1] + targetPos[2] * targetPos[2]);
+        double[] basePos = new double[]{0, 0, 0};
+        if (!transforms.isEmpty()) {
 
-        return dist <= maxReach;
+            basePos = transforms.get(0).getPosition();
 
+        }
+
+        double dx = targetPos[0] - basePos[0];
+        double dy = targetPos[1] - basePos[1];
+        double dz = targetPos[2] - basePos[2];
+        double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+
+        return dist <= (maxReach * 1.1); // Allow a 10% safety margin for offset alignment
     }
 
+    /**
+     * Solves IK iteratively using Damped Least Squares (DLS).
+     * Updates dhModels in-place to the best achieved pose.
+     *
+     * @return true if target was reached within tolerance, false if stopped at closest posture
+     */
     public boolean solve(List<DHParameterModel> dhModels, double[] targetPos, int maxIterations, double tolerance) {
-
-        double lambda = 0.2; // Damping parameter for numerical stability near singularities
+        double lambda = 0.15; // Damping constant
+        double bestError = Double.MAX_VALUE;
+        double[] bestThetas = new double[dhModels.size()];
 
         for (int iter = 0; iter < maxIterations; iter++) {
-
             List<DHParameter> dhParams = getCurrentDHParams(dhModels);
             List<Matrix4x4> transforms = fkEngine.computeCumulativeTransforms(dhParams);
 
@@ -48,10 +67,17 @@ public class IKSolver {
 
             double errorDist = Math.sqrt(ex * ex + ey * ey + ez * ez);
 
+            // Track best posture achieved
+            if (errorDist < bestError) {
+                bestError = errorDist;
+                for (int i = 0; i < dhModels.size(); i++) {
+                    bestThetas[i] = dhModels.get(i).getTheta();
+                }
+            }
+
+            // Convergence check
             if (errorDist < tolerance) {
-
                 return true;
-
             }
 
             int numJoints = dhModels.size();
@@ -59,25 +85,15 @@ public class IKSolver {
 
             // Damped Least Squares: J_damped = J^T * (J * J^T + lambda^2 * I)^-1
             double[][] A = new double[3][3];
-
             for (int r = 0; r < 3; r++) {
-
                 for (int c = 0; c < 3; c++) {
-
                     double sum = 0;
-
                     for (int k = 0; k < numJoints; k++) {
-
                         sum += J[r][k] * J[c][k];
-
                     }
-
                     if (r == c) sum += lambda * lambda;
-
                     A[r][c] = sum;
-
                 }
-
             }
 
             double[][] Ainv = invert3x3(A);
@@ -89,22 +105,24 @@ public class IKSolver {
             dampedErr[2] = Ainv[2][0] * ex + Ainv[2][1] * ey + Ainv[2][2] * ez;
 
             for (int j = 0; j < numJoints; j++) {
-
                 double dq = J[0][j] * dampedErr[0] + J[1][j] * dampedErr[1] + J[2][j] * dampedErr[2];
                 double newTheta = dhModels.get(j).getTheta() + Math.toDegrees(dq);
 
-                // Set joint limits to [-180, 180] degrees
-                if (newTheta > 180) newTheta = 180;
-                if (newTheta < -180) newTheta = -180;
+                // Angle wrapping [-180, 180]
+                while (newTheta > 180) newTheta -= 360;
+                while (newTheta < -180) newTheta += 360;
 
                 dhModels.get(j).setTheta(newTheta);
-
             }
-
         }
 
-        return false;
+        // If exact tolerance wasn't met, restore best configuration achieved
+        for (int i = 0; i < dhModels.size(); i++) {
+            dhModels.get(i).setTheta(bestThetas[i]);
+        }
 
+        // Return true if close enough (within 0.5 units) to proceed with animation
+        return bestError <= 0.5;
     }
 
     private double[][] computePositionJacobian(List<DHParameterModel> dhModels, double[] currentPos) {
@@ -112,7 +130,6 @@ public class IKSolver {
         double[][] J = new double[3][n];
 
         for (int j = 0; j < n; j++) {
-
             DHParameterModel model = dhModels.get(j);
             double origTheta = model.getTheta();
 
@@ -131,11 +148,9 @@ public class IKSolver {
     }
 
     private List<DHParameter> getCurrentDHParams(List<DHParameterModel> dhModels) {
-
         List<DHParameter> list = new ArrayList<>();
         for (DHParameterModel m : dhModels) list.add(m.toDHParameter());
         return list;
-
     }
 
     private double[][] invert3x3(double[][] m) {

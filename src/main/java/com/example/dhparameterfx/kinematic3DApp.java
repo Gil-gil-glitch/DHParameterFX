@@ -146,8 +146,7 @@ public class kinematic3DApp extends Application {
         // 1. Check basic workspace reachability
         if (!ikSolver.isTargetReachable(dhModels, targetPos)) {
             showWarningDialog("Unreachable Target",
-                    "The target position (" + String.format("%.1f, %.1f, %.1f", targetPos[0], targetPos[1], targetPos[2]) +
-                            ") is beyond the robot's kinematic reach.");
+                    STR."The target position (\{String.format("%.1f, %.1f, %.1f", targetPos[0], targetPos[1], targetPos[2])}) is beyond the robot's kinematic reach.");
             return;
         }
 

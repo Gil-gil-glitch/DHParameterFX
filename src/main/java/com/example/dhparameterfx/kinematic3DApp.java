@@ -47,6 +47,8 @@ public class kinematic3DApp extends Application {
     private final double[] targetPos = new double[]{10.0, 5.0, 5.0};
     private AnimationTimer playbackTimer;
 
+    private boolean useCartesianTrajectory = true;
+
     private Node createSelectionHighlightBox(double size) {
         Box box = new Box(size, size, size);
         box.setDrawMode(DrawMode.LINE);
@@ -178,24 +180,44 @@ public class kinematic3DApp extends Application {
         final long startTime = System.nanoTime();
         final double durationNs = 2.0 * 1e9; // 2 seconds
 
+        // ... inside runIKAndAnimate(), after checking reachability and setting qStart/qEnd ...
+
+        double[] startPos = transforms.get(transforms.size() - 1).getPosition();
+
         playbackTimer = new AnimationTimer() {
             @Override
             public void handle(long now) {
                 double elapsed = now - startTime;
-                double tNorm = elapsed / durationNs;
+                double tNorm = Math.max(0.0, Math.min(1.0, elapsed / durationNs));
 
-                if (tNorm >= 1.0) {
-                    tNorm = 1.0;
-                    stop();
-                }
+                // Smooth cubic easing for the timeline
+                double s = 3 * tNorm * tNorm - 2 * tNorm * tNorm * tNorm;
 
-                double[] currentQ = TrajectoryPlanner.interpolateCubic(qStart, qEnd, tNorm);
-                for (int i = 0; i < dhModels.size(); i++) {
-                    dhModels.get(i).setTheta(currentQ[i]);
+                if (useCartesianTrajectory) {
+                    // CARTESIAN SPACE: Move end-effector in a straight line and run a fast IK step
+                    double[] currentTarget = new double[]{
+                            startPos[0] + s * (targetPos[0] - startPos[0]),
+                            startPos[1] + s * (targetPos[1] - startPos[1]),
+                            Math.max(0.0, startPos[2] + s * (targetPos[2] - startPos[2])) // Floor constraint
+                    };
+
+                    // Run a rapid 5-iteration IK to track the straight line per frame
+                    ikSolver.solve(dhModels, currentTarget, 5, 0.1);
+
+                } else {
+                    // JOINT SPACE: Interpolate angles directly (may cause swinging)
+                    double[] currentQ = TrajectoryPlanner.interpolateCubic(qStart, qEnd, tNorm);
+                    for (int i = 0; i < dhModels.size(); i++) {
+                        dhModels.get(i).setTheta(currentQ[i]);
+                    }
                 }
 
                 rebuildUIControls();
                 updateRobot3D();
+
+                if (tNorm >= 1.0) {
+                    stop();
+                }
             }
         };
         playbackTimer.start();

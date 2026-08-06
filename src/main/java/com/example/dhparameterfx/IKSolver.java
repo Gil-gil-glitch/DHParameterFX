@@ -114,6 +114,23 @@ public class IKSolver {
                 if (newTheta > model.getMaxTheta()) newTheta = model.getMaxTheta();
                 if (newTheta < model.getMinTheta()) newTheta = model.getMinTheta();
 
+                // CARTESIAN ERROR CLAMPING & FLOOR GUARD
+                if (errorDist > maxCartesianStep) {
+
+                    double scale = maxCartesianStep / errorDist;
+                    ex *= scale;
+                    ey *= scale;
+                    ez *= scale;
+
+                }
+
+                // FLOOR CONSTRAINT: Prevent the solver from driving the target underground
+                if (currentPos[2] + ez < 0.0) {
+
+                    ez = -currentPos[2]; // Cap the downward movement exactly at the floor (Z=0)
+
+                }
+
                 model.setTheta(newTheta);
             }
         }

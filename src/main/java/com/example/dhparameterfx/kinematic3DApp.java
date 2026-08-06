@@ -49,6 +49,68 @@ public class kinematic3DApp extends Application {
 
     private boolean useCartesianTrajectory = true;
 
+    // --- Persistent scene-graph containers ---
+    // jointsGroup holds the per-joint axis/link/highlight nodes. It is fully torn down and
+    // rebuilt only on STRUCTURAL changes (add/remove joint, preset load, selection change,
+    // manual slider edit). During animation playback we never touch it structurally - we only
+    // update the transforms of the nodes already inside it (see refreshJointTransforms()).
+    private final Group jointsGroup = new Group();
+    private final Group floorPlaneGroup = new Group();
+    private final Group trailGroup = new Group();
+
+    // Node caches so the 60fps animation loop can update transforms in place instead of
+    // allocating new AxisGroup/Cylinder/Material objects every frame.
+    private final List<AxisGroup> jointAxisNodes = new ArrayList<>();
+    private final List<Cylinder> linkCylinderNodes = new ArrayList<>();
+    private Node highlightBoxNode;
+
+    // Floor / restriction-plane state
+    private boolean showFloorPlane = true;
+    private static final double FLOOR_EPSILON = 0.05;
+
+    // Planned-path trail state
+    private boolean showPlannedTrail = true;
+
+    /**
+     * Builds a visible restriction plane at Z = 0 (the "floor" the arm's joints must not dip
+     * below). Lives in the same local frame as the DH-computed joint positions, so it lines
+     * up exactly with the Z >= 0 constraint enforced elsewhere. Sized as a square of the given
+     * extent, with a light reference grid every {@code gridSpacing} units.
+     */
+    private Node buildFloorPlane(double extent, double gridSpacing) {
+        Group plane = new Group();
+
+        Box fill = new Box(extent, extent, 0.05);
+        PhongMaterial fillMat = new PhongMaterial();
+        fillMat.setDiffuseColor(Color.web("#61afef", 0.12));
+        fillMat.setSpecularColor(Color.TRANSPARENT);
+        fill.setMaterial(fillMat);
+        fill.setDrawMode(DrawMode.FILL);
+        fill.setCullFace(CullFace.NONE);
+        fill.setTranslateZ(0);
+        plane.getChildren().add(fill);
+
+        PhongMaterial lineMat = new PhongMaterial(Color.web("#61afef", 0.35));
+        double lineThickness = 0.06;
+        double half = extent / 2.0;
+        for (double x = -half; x <= half + 1e-6; x += gridSpacing) {
+            Box line = new Box(lineThickness, extent, 0.06);
+            line.setMaterial(lineMat);
+            line.setTranslateX(x);
+            line.setTranslateZ(0.02);
+            plane.getChildren().add(line);
+        }
+        for (double y = -half; y <= half + 1e-6; y += gridSpacing) {
+            Box line = new Box(extent, lineThickness, 0.06);
+            line.setMaterial(lineMat);
+            line.setTranslateY(y);
+            line.setTranslateZ(0.02);
+            plane.getChildren().add(line);
+        }
+
+        return plane;
+    }
+
     private Node createSelectionHighlightBox(double size) {
         Box box = new Box(size, size, size);
         box.setDrawMode(DrawMode.LINE);
@@ -76,6 +138,17 @@ public class kinematic3DApp extends Application {
         robotGroup.getChildren().add(targetSphere);
         updateTargetSpherePosition();
 
+        // Persistent containers: added ONCE. jointsGroup contents get rebuilt on structural
+        // changes; floorPlaneGroup/trailGroup are toggled via visibility, never torn down.
+        floorPlaneGroup.getChildren().add(buildFloorPlane(30.0, 5.0));
+        floorPlaneGroup.setVisible(showFloorPlane);
+        floorPlaneGroup.setMouseTransparent(true);
+
+        trailGroup.setVisible(showPlannedTrail);
+        trailGroup.setMouseTransparent(true);
+
+        robotGroup.getChildren().addAll(floorPlaneGroup, trailGroup, jointsGroup);
+
         // Lighting
         AmbientLight ambient = new AmbientLight(Color.color(0.4, 0.4, 0.4));
         PointLight pointLight = new PointLight(Color.WHITE);
@@ -85,7 +158,7 @@ public class kinematic3DApp extends Application {
         world.getChildren().addAll(ambient, pointLight);
 
         // Default 3-Joint Robot
-        dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 20.0));
+        dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 30.0));
         dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 40.0));
         dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -25.0));
 
@@ -142,47 +215,136 @@ public class kinematic3DApp extends Application {
         targetSphere.setTranslateZ(targetPos[2]);
     }
 
+    /** Computes the cumulative FK transforms for the DH chain's current pose. */
+    private List<Matrix4x4> computeCurrentTransforms() {
+        List<DHParameter> dhParams = new ArrayList<>();
+        for (DHParameterModel model : dhModels) {
+            dhParams.add(model.toDHParameter());
+        }
+        return fkEngine.computeCumulativeTransforms(dhParams);
+    }
+
+    /** True if any joint in the chain has dipped below the Z = 0 floor plane. */
+    private boolean violatesFloor(List<Matrix4x4> transforms) {
+        for (Matrix4x4 m : transforms) {
+            if (m.getPosition()[2] < -FLOOR_EPSILON) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Draws a visible 3D trail through the workspace tracing the path the end-effector is
+     * about to take, BEFORE the arm moves. For Cartesian trajectories this is a straight line
+     * from the current end-effector position to the target. For joint-space trajectories the
+     * path is generally curved in Cartesian space, so we sample the interpolated joint
+     * trajectory at several points and connect the resulting end-effector positions.
+     */
+    private void buildPlannedTrail(double[] qStart, double[] qEnd, double[] startPos) {
+        trailGroup.getChildren().clear();
+        Color trailColor = Color.web("#98c379", 0.85);
+
+        List<Point3D> samples = new ArrayList<>();
+
+        if (useCartesianTrajectory) {
+            samples.add(new Point3D(startPos[0], startPos[1], startPos[2]));
+            samples.add(new Point3D(targetPos[0], targetPos[1], Math.max(0.0, targetPos[2])));
+        } else {
+            int sampleCount = 24;
+            for (int s = 0; s <= sampleCount; s++) {
+                double t = (double) s / sampleCount;
+                double[] q = TrajectoryPlanner.interpolateCubic(qStart, qEnd, t);
+                for (int i = 0; i < dhModels.size(); i++) {
+                    dhModels.get(i).setTheta(q[i]);
+                }
+                List<Matrix4x4> transforms = computeCurrentTransforms();
+                double[] p = transforms.get(transforms.size() - 1).getPosition();
+                samples.add(new Point3D(p[0], p[1], p[2]));
+            }
+            // Restore the chain to its starting pose - the caller resets to qStart right after
+            // this returns, but we leave it consistent either way.
+            for (int i = 0; i < dhModels.size(); i++) {
+                dhModels.get(i).setTheta(qStart[i]);
+            }
+        }
+
+        for (int i = 1; i < samples.size(); i++) {
+            Node segment = createLinkCylinder(samples.get(i - 1), samples.get(i), 0.15, trailColor);
+            trailGroup.getChildren().add(segment);
+        }
+
+        // A small marker sphere at the destination makes the endpoint of the plan unambiguous.
+        Sphere endMarker = new Sphere(0.4);
+        endMarker.setMaterial(new PhongMaterial(trailColor));
+        Point3D lastPoint = samples.get(samples.size() - 1);
+        endMarker.setTranslateX(lastPoint.getX());
+        endMarker.setTranslateY(lastPoint.getY());
+        endMarker.setTranslateZ(lastPoint.getZ());
+        trailGroup.getChildren().add(endMarker);
+    }
+
     private void runIKAndAnimate() {
-        // 1. Check basic workspace reachability
+        // Check basic workspace reachability
         if (!ikSolver.isTargetReachable(dhModels, targetPos)) {
             showWarningDialog("Unreachable Target",
-                    "The target position (" + String.format("%.1f, %.1f, %.1f", targetPos[0], targetPos[1], targetPos[2]) +
-                            ") is beyond the robot's kinematic reach.");
+                    String.format("The target position (%.1f, %.1f, %.1f) is beyond the robot's kinematic reach.",
+                            targetPos[0], targetPos[1], targetPos[2]));
             return;
         }
 
-        // 2. Capture starting configuration
+        // 1. Capture starting configuration
         double[] qStart = new double[dhModels.size()];
         for (int i = 0; i < dhModels.size(); i++) {
             qStart[i] = dhModels.get(i).getTheta();
         }
 
-        // 3. Solve IK (350 iterations, 0.1 tolerance)
+        // 2. Solve IK (350 iterations, 0.1 tolerance)
         boolean solved = ikSolver.solve(dhModels, targetPos, 350, 0.1);
 
         if (!solved) {
-            // If best error distance > 0.5, alert user
             showWarningDialog("Target Unreachable",
                     "The manipulator reached its limit towards the target, but could not match the exact position due to joint constraints.");
+            // Reset to start position and abort
+            for (int i = 0; i < dhModels.size(); i++) {
+                dhModels.get(i).setTheta(qStart[i]);
+            }
             return;
         }
 
-        // 4. Record target joint configuration & reset to start position for trajectory
+        // 3. Capture end angles after the solver finishes successfully
         double[] qEnd = new double[dhModels.size()];
         for (int i = 0; i < dhModels.size(); i++) {
             qEnd[i] = dhModels.get(i).getTheta();
+        }
+
+        // 4. Reset the models back to the start so we can animate from the beginning
+        for (int i = 0; i < dhModels.size(); i++) {
             dhModels.get(i).setTheta(qStart[i]);
         }
 
+        // 5. Compute transforms at the starting pose to define startPos for the straight line
+        List<Matrix4x4> startTransforms = computeCurrentTransforms();
+        double[] startPos = startTransforms.get(startTransforms.size() - 1).getPosition();
+
+        // 6. Build the visible planned-path trail BEFORE any motion happens, so the user can
+        // see exactly where the arm is about to go.
+        buildPlannedTrail(qStart, qEnd, startPos);
+
+        // dhModels may have been left mid-sample by buildPlannedTrail's joint-space preview;
+        // guarantee we're sitting at the start pose before animating.
+        for (int i = 0; i < dhModels.size(); i++) {
+            dhModels.get(i).setTheta(qStart[i]);
+        }
+
+        // 7. Stop any existing animation
         if (playbackTimer != null) playbackTimer.stop();
 
-        // 5. Smooth trajectory animation
+        // 8. Start the new animation timer
         final long startTime = System.nanoTime();
-        final double durationNs = 2.0 * 1e9; // 2 seconds
+        final double durationNs = 1_500_000_000.0; // 1.5 seconds
 
-        // ... inside runIKAndAnimate(), after checking reachability and setting qStart/qEnd ...
-
-        double[] startPos = transforms.get(transforms.size() - 1).getPosition();
+        // Tracks the last configuration that did NOT violate the floor, so a frame that would
+        // dip a joint below Z = 0 can be rejected without freezing the whole animation.
+        final double[] lastGoodQ = qStart.clone();
 
         playbackTimer = new AnimationTimer() {
             @Override
@@ -190,30 +352,46 @@ public class kinematic3DApp extends Application {
                 double elapsed = now - startTime;
                 double tNorm = Math.max(0.0, Math.min(1.0, elapsed / durationNs));
 
-                // Smooth cubic easing for the timeline
+                // Smooth cubic easing s(t) = 3t^2 - 2t^3
                 double s = 3 * tNorm * tNorm - 2 * tNorm * tNorm * tNorm;
 
                 if (useCartesianTrajectory) {
-                    // CARTESIAN SPACE: Move end-effector in a straight line and run a fast IK step
+                    // CARTESIAN SPACE: Interpolate end-effector in a straight line
                     double[] currentTarget = new double[]{
                             startPos[0] + s * (targetPos[0] - startPos[0]),
                             startPos[1] + s * (targetPos[1] - startPos[1]),
                             Math.max(0.0, startPos[2] + s * (targetPos[2] - startPos[2])) // Floor constraint
                     };
 
-                    // Run a rapid 5-iteration IK to track the straight line per frame
+                    // Run a quick 5-iteration IK to track the line on this frame
                     ikSolver.solve(dhModels, currentTarget, 5, 0.1);
-
                 } else {
-                    // JOINT SPACE: Interpolate angles directly (may cause swinging)
+                    // JOINT SPACE: Interpolate angles directly
                     double[] currentQ = TrajectoryPlanner.interpolateCubic(qStart, qEnd, tNorm);
                     for (int i = 0; i < dhModels.size(); i++) {
                         dhModels.get(i).setTheta(currentQ[i]);
                     }
                 }
 
-                rebuildUIControls();
-                updateRobot3D();
+                // Floor enforcement: no joint (not just the end-effector) may dip below Z = 0.
+                // If this frame's solution violates that, roll back to the last good pose
+                // instead of applying it - the arm simply pauses at the floor boundary rather
+                // than clipping through it.
+                List<Matrix4x4> frameTransforms = computeCurrentTransforms();
+                if (violatesFloor(frameTransforms)) {
+                    for (int i = 0; i < dhModels.size(); i++) {
+                        dhModels.get(i).setTheta(lastGoodQ[i]);
+                    }
+                } else {
+                    for (int i = 0; i < dhModels.size(); i++) {
+                        lastGoodQ[i] = dhModels.get(i).getTheta();
+                    }
+                }
+
+                // Fast path: update existing node transforms only. No geometry is allocated
+                // here, which is what makes 60fps playback smooth (including the very first
+                // move) instead of rebuilding the whole robot's mesh every frame.
+                refreshJointTransforms();
 
                 if (tNorm >= 1.0) {
                     stop();
@@ -222,6 +400,7 @@ public class kinematic3DApp extends Application {
         };
         playbackTimer.start();
     }
+
 
     private void showWarningDialog(String title, String message) {
         Alert alert = new Alert(Alert.AlertType.WARNING);
@@ -302,7 +481,24 @@ public class kinematic3DApp extends Application {
         planMotionBtn.setStyle("-fx-background-color: #61afef; -fx-text-fill: #1e1e24; -fx-font-weight: bold;");
         planMotionBtn.setOnAction(e -> runIKAndAnimate());
 
-        ikBox.getChildren().addAll(targetXRow, targetYRow, targetZRow, planMotionBtn);
+        CheckBox floorPlaneToggle = new CheckBox("Show floor plane (Z ≥ 0 limit)");
+        floorPlaneToggle.setSelected(showFloorPlane);
+        floorPlaneToggle.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 11px;");
+        floorPlaneToggle.selectedProperty().addListener((o, oldV, newV) -> {
+            showFloorPlane = newV;
+            floorPlaneGroup.setVisible(newV);
+        });
+
+        CheckBox trailToggle = new CheckBox("Show planned path trail");
+        trailToggle.setSelected(showPlannedTrail);
+        trailToggle.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 11px;");
+        trailToggle.selectedProperty().addListener((o, oldV, newV) -> {
+            showPlannedTrail = newV;
+            trailGroup.setVisible(newV);
+        });
+
+        ikBox.getChildren().addAll(targetXRow, targetYRow, targetZRow, planMotionBtn,
+                floorPlaneToggle, trailToggle);
 
         controlsContainer = new VBox(12);
         ScrollPane scrollPane = new ScrollPane(controlsContainer);
@@ -326,7 +522,12 @@ public class kinematic3DApp extends Application {
         lbl.setPrefWidth(65);
         lbl.setStyle("-fx-text-fill: #abb2bf; -fx-font-size: 11px;");
 
-        Slider slider = new Slider(-25, 25, posArray[index]);
+        // Index 2 is the Z (height/floor) axis - the target ball can never be placed below
+        // the floor plane, so its slider and text input floor at 0 instead of -25.
+        double minVal = (index == 2) ? 0.0 : -25.0;
+        posArray[index] = Math.max(minVal, posArray[index]);
+
+        Slider slider = new Slider(minVal, 25, posArray[index]);
         HBox.setHgrow(slider, Priority.ALWAYS);
 
         TextField txt = new TextField(String.format("%.2f", posArray[index]));
@@ -335,17 +536,18 @@ public class kinematic3DApp extends Application {
 
         slider.valueProperty().addListener((o, oldV, newV) -> {
             if (!txt.isFocused()) {
-                posArray[index] = newV.doubleValue();
-                txt.setText(String.format("%.2f", newV.doubleValue()));
+                posArray[index] = Math.max(minVal, newV.doubleValue());
+                txt.setText(String.format("%.2f", posArray[index]));
                 updateTargetSpherePosition();
             }
         });
 
         Runnable applyTxt = () -> {
             try {
-                double parsed = ExpressionParser.parse(txt.getText());
+                double parsed = Math.max(minVal, ExpressionParser.parse(txt.getText()));
                 posArray[index] = parsed;
                 slider.setValue(parsed);
+                txt.setText(String.format("%.2f", parsed));
                 updateTargetSpherePosition();
             } catch (Exception ex) {
                 txt.setStyle("-fx-background-color: #1e1e24; -fx-text-fill: #e06c75; -fx-font-size: 11px; -fx-border-color: #e06c75; -fx-border-radius: 3;");
@@ -435,12 +637,22 @@ public class kinematic3DApp extends Application {
 
             limitsRow.getChildren().addAll(minLbl, minTxt, maxLbl, maxTxt);
 
+            HBox dialsRow = new HBox(30);
+            dialsRow.setAlignment(Pos.CENTER);
+
+            VBox thetaBox = new VBox(5, new Label("Angle (θ)"), new RotaryDial(model.thetaProperty(), model.getMinTheta(), model.getMaxTheta()));
+            thetaBox.setAlignment(Pos.CENTER);
+
+            VBox alphaBox = new VBox(5, new Label("Twist (α)"), new RotaryDial(model.alphaProperty(), -180, 180));
+            alphaBox.setAlignment(Pos.CENTER);
+
+            dialsRow.getChildren().addAll(thetaBox, alphaBox);
+
             card.getChildren().addAll(
                     cardHeader,
                     createSliderRow("a (Length):", -20, 20, model.aProperty(), false),
-                    createSliderRow("α (Twist °):", -180, 180, model.alphaProperty(), true),
                     createSliderRow("d (Offset):", -20, 20, model.dProperty(), false),
-                    createSliderRow("θ (Angle °):", model.getMinTheta(), model.getMaxTheta(), model.thetaProperty(), true),
+                    dialsRow, // Replaced the two angle sliders with the dual rotary dials
                     limitsRow
             );
 
@@ -498,16 +710,20 @@ public class kinematic3DApp extends Application {
         return row;
     }
 
+    /**
+     * STRUCTURAL rebuild: tears down and recreates the per-joint 3D nodes (axis markers, link
+     * cylinders, selection highlight). This allocates new geometry, so it's only called on
+     * structural changes - adding/removing a joint, loading a preset, importing, selecting a
+     * different joint, or a manual slider/dial edit. It is deliberately NOT called from the
+     * 60fps animation loop; see refreshJointTransforms() for that.
+     */
     private void updateRobot3D() {
-        robotGroup.getChildren().clear();
-        robotGroup.getChildren().add(targetSphere);
+        jointsGroup.getChildren().clear();
+        jointAxisNodes.clear();
+        linkCylinderNodes.clear();
+        highlightBoxNode = null;
 
-        List<DHParameter> dhParams = new ArrayList<>();
-        for (DHParameterModel model : dhModels) {
-            dhParams.add(model.toDHParameter());
-        }
-
-        List<Matrix4x4> transforms = fkEngine.computeCumulativeTransforms(dhParams);
+        List<Matrix4x4> transforms = computeCurrentTransforms();
 
         if (!transforms.isEmpty() && hud != null) {
             hud.update(transforms.get(transforms.size() - 1));
@@ -515,16 +731,18 @@ public class kinematic3DApp extends Application {
 
         for (int i = 0; i < transforms.size(); i++) {
             Matrix4x4 mat = transforms.get(i);
+            boolean belowFloor = mat.getPosition()[2] < -FLOOR_EPSILON;
 
             AxisGroup axis = new AxisGroup(3.0, 0.2, i);
             axis.setUserData(i);
             applyMatrixToNode(axis, mat);
-            robotGroup.getChildren().add(axis);
+            jointsGroup.getChildren().add(axis);
+            jointAxisNodes.add(axis);
 
             if (i == selectedJointIndex) {
-                Node highlightBox = createSelectionHighlightBox(4.5);
-                applyMatrixToNode(highlightBox, mat);
-                robotGroup.getChildren().add(highlightBox);
+                highlightBoxNode = createSelectionHighlightBox(4.5);
+                applyMatrixToNode(highlightBoxNode, mat);
+                jointsGroup.getChildren().add(highlightBoxNode);
             }
 
             if (i > 0) {
@@ -534,8 +752,45 @@ public class kinematic3DApp extends Application {
                 Point3D start = new Point3D(pPrev[0], pPrev[1], pPrev[2]);
                 Point3D end = new Point3D(pCurr[0], pCurr[1], pCurr[2]);
 
-                Node linkCylinder = createLinkCylinder(start, end, 0.4, Color.GRAY);
-                robotGroup.getChildren().add(linkCylinder);
+                // Flag the link red if either endpoint has dipped below the floor - a visible,
+                // immediate cue on top of the floor plane itself.
+                boolean prevBelow = pPrev[2] < -FLOOR_EPSILON;
+                Color linkColor = (belowFloor || prevBelow) ? Color.web("#e06c75") : Color.GRAY;
+
+                Node linkNode = createLinkCylinder(start, end, 0.4, linkColor);
+                jointsGroup.getChildren().add(linkNode);
+                linkCylinderNodes.add(linkNode instanceof Cylinder ? (Cylinder) linkNode : null);
+            }
+        }
+    }
+
+    /**
+     * FAST PATH: updates only the transforms of already-existing joint/link nodes - no new
+     * geometry is allocated. Safe to call every animation frame. Only theta/alpha change
+     * during playback (link lengths 'a'/'d' stay fixed), so reusing each Cylinder's existing
+     * mesh and just repositioning/reorienting it is valid and cheap.
+     */
+    private void refreshJointTransforms() {
+        List<Matrix4x4> transforms = computeCurrentTransforms();
+
+        if (!transforms.isEmpty() && hud != null) {
+            hud.update(transforms.get(transforms.size() - 1));
+        }
+
+        for (int i = 0; i < transforms.size() && i < jointAxisNodes.size(); i++) {
+            Matrix4x4 mat = transforms.get(i);
+            replaceMatrixOnNode(jointAxisNodes.get(i), mat);
+
+            if (i == selectedJointIndex && highlightBoxNode != null) {
+                replaceMatrixOnNode(highlightBoxNode, mat);
+            }
+
+            if (i > 0 && (i - 1) < linkCylinderNodes.size()) {
+                double[] pPrev = transforms.get(i - 1).getPosition();
+                double[] pCurr = mat.getPosition();
+                Point3D start = new Point3D(pPrev[0], pPrev[1], pPrev[2]);
+                Point3D end = new Point3D(pCurr[0], pCurr[1], pCurr[2]);
+                updateLinkTransform(linkCylinderNodes.get(i - 1), start, end);
             }
         }
     }
@@ -547,6 +802,34 @@ public class kinematic3DApp extends Application {
                 m.get(2, 0), m.get(2, 1), m.get(2, 2), m.get(2, 3)
         );
         node.getTransforms().add(affine);
+    }
+
+    /** Like applyMatrixToNode, but replaces the node's existing transform instead of stacking. */
+    private void replaceMatrixOnNode(Node node, Matrix4x4 m) {
+        Affine affine = new Affine(
+                m.get(0, 0), m.get(0, 1), m.get(0, 2), m.get(0, 3),
+                m.get(1, 0), m.get(1, 1), m.get(1, 2), m.get(1, 3),
+                m.get(2, 0), m.get(2, 1), m.get(2, 2), m.get(2, 3)
+        );
+        node.getTransforms().setAll(affine);
+    }
+
+    /** Repositions/reorients an existing link Cylinder between two points without reallocating it. */
+    private void updateLinkTransform(Cylinder cylinder, Point3D p1, Point3D p2) {
+        if (cylinder == null) return;
+        Point3D diff = p2.subtract(p1);
+        if (diff.magnitude() < 1e-4) return;
+
+        Point3D mid = p1.add(p2).multiply(0.5);
+        Point3D yAxis = new Point3D(0, 1, 0);
+        Point3D axisOfRot = yAxis.crossProduct(diff);
+        double angle = yAxis.angle(diff);
+
+        cylinder.getTransforms().clear();
+        cylinder.getTransforms().add(new Translate(mid.getX(), mid.getY(), mid.getZ()));
+        if (axisOfRot.magnitude() > 1e-4) {
+            cylinder.getTransforms().add(new Rotate(angle, axisOfRot));
+        }
     }
 
     private Node createLinkCylinder(Point3D p1, Point3D p2, double radius, Color color) {

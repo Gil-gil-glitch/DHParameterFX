@@ -85,7 +85,7 @@ public class kinematic3DApp extends Application {
         world.getChildren().addAll(ambient, pointLight);
 
         // Default 3-Joint Robot
-        dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 30.0));
+        dhModels.add(new DHParameterModel(0.0, 90.0, 5.0, 20.0));
         dhModels.add(new DHParameterModel(10.0, 0.0, 0.0, 40.0));
         dhModels.add(new DHParameterModel(8.0, 0.0, 0.0, -25.0));
 

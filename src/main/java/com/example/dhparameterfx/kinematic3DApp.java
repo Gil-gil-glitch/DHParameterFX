@@ -233,6 +233,19 @@ public class kinematic3DApp extends Application {
     }
 
     /**
+     * Updates the HUD with the transform of the currently SELECTED joint (not always the
+     * end-effector), so the HUD actually functions as a DH-parameter checker: pick a joint,
+     * see the matrix that joint's (a, alpha, d, theta) row produces. Falls back to a valid
+     * index if the selection is stale (e.g. right after a joint was deleted).
+     */
+    private void updateHudDisplay(List<Matrix4x4> transforms) {
+        if (transforms.isEmpty() || hud == null) return;
+        int idx = Math.max(0, Math.min(selectedJointIndex, transforms.size() - 1));
+        hud.update(transforms.get(idx));
+
+    }
+
+    /**
      * Draws a visible 3D trail through the workspace tracing the path the end-effector is
      * about to take, BEFORE the arm moves. For Cartesian trajectories this is a straight line
      * from the current end-effector position to the target. For joint-space trajectories the
@@ -725,9 +738,7 @@ public class kinematic3DApp extends Application {
 
         List<Matrix4x4> transforms = computeCurrentTransforms();
 
-        if (!transforms.isEmpty() && hud != null) {
-            hud.update(transforms.get(transforms.size() - 1));
-        }
+        updateHudDisplay(transforms);
 
         for (int i = 0; i < transforms.size(); i++) {
             Matrix4x4 mat = transforms.get(i);
@@ -773,9 +784,7 @@ public class kinematic3DApp extends Application {
     private void refreshJointTransforms() {
         List<Matrix4x4> transforms = computeCurrentTransforms();
 
-        if (!transforms.isEmpty() && hud != null) {
-            hud.update(transforms.get(transforms.size() - 1));
-        }
+        updateHudDisplay(transforms);
 
         for (int i = 0; i < transforms.size() && i < jointAxisNodes.size(); i++) {
             Matrix4x4 mat = transforms.get(i);
